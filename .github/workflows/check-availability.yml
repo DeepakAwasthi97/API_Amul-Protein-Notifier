@@ -1,0 +1,49 @@
+name: Amul Protein Notifier
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  check-products:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set up environment variables
+        run: |
+          echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> $GITHUB_ENV
+          echo "GH_PAT=${{ secrets.GH_PAT }}" >> $GITHUB_ENV
+          echo "PRIVATE_REPO=${{ secrets.PRIVATE_REPO }}" >> $GITHUB_ENV
+
+      - name: Run Amul Protein Notifier (API-based)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          PRIVATE_REPO: ${{ secrets.PRIVATE_REPO }}
+        run: |
+          python check_products.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-check-logs
+          path: |
+            product_check.log

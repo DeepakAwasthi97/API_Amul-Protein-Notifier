@@ -1,0 +1,10 @@
+.venv/
+.env
+*.log
+__pycache__/
+*.pyc
+users.json
+product_check.log
+infojs_debug.log
+# Exclude backup and debug files
+BACKUP_check_products.py
