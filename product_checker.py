@@ -33,13 +33,13 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
                 else:
                     availability = "Sold Out"
                 product_status.append((product_name, availability))
-            return product_status, substore_id
+            return product_status, substore_id, substore
     except Exception as e:
         from utils import mask
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"API-only error for pincode {mask(pincode)}: {str(e)}")
-        return [], None
+        return [], None, None
 
 async def check_product_availability_async(pincode):
     global pincode_cache, substore_cache, substore_pincode_map
@@ -47,57 +47,80 @@ async def check_product_availability_async(pincode):
     from utils import mask
     import logging
     logger = logging.getLogger(__name__)
-    if USE_SUBSTORE_CACHE:
-        if not substore_pincode_map:
-            substore_info = load_substore_mapping()
-            for sub in substore_info:
-                for pc in sub.get('pincodes', '').split(','):
-                    pc = pc.strip()
-                    if pc:
-                        substore_pincode_map[pc] = sub['_id']
-        substore_id = substore_pincode_map.get(str(pincode))
-        if substore_id and substore_id in substore_cache:
-            logger.info(f"[CACHE] Using substore cache for substore_id: {substore_id} (pincode: {mask(pincode)})")
-            return substore_cache[substore_id]
-        elif pincode in pincode_cache:
-            logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)} (fallback)")
-            return pincode_cache[pincode]
-    else:
-        if pincode in pincode_cache:
-            logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)}")
-            return pincode_cache[pincode]
     try:
-        product_status, substore_id = await get_products_availability_api_only_async(pincode)
+        if USE_SUBSTORE_CACHE:
+            if not substore_pincode_map:
+                substore_info = load_substore_mapping()
+                for sub in substore_info:
+                    for pc in sub.get('pincodes', '').split(','):
+                        pc = pc.strip()
+                        if pc:
+                            substore_pincode_map[pc] = sub['_id']
+            substore_id = substore_pincode_map.get(str(pincode))
+            # If substore_id is comma-separated, use the first ID for cache lookup
+            if substore_id and ',' in substore_id:
+                substore_id = substore_id.split(',')[0].strip()
+            if substore_id and substore_id in substore_cache:
+                logger.info(f"[CACHE] Using substore cache for substore_id: {substore_id} (pincode: {mask(pincode)})")
+                return substore_cache[substore_id]
+            elif pincode in pincode_cache:
+                logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)} (fallback)")
+                return pincode_cache[pincode]
+        else:
+            if pincode in pincode_cache:
+                logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)}")
+                return pincode_cache[pincode]
+        
+        product_status, substore_id, substore = await get_products_availability_api_only_async(pincode)
         if not product_status or not substore_id:
             logger.error(f"Skipping product processing for pincode {mask(pincode)} due to session failure.")
             return []
+        
         logger.info(f"Processed {len(product_status)} products for substore {substore_id} (pincode {mask(pincode)})")
+        
         if USE_SUBSTORE_CACHE and substore_id:
             substore_cache[substore_id] = product_status
             substore_pincode_map[str(pincode)] = substore_id
             substore_info = load_substore_mapping()
             found = False
             for sub in substore_info:
-                if sub['_id'] == substore_id:
+                sub_alias = sub.get('alias', '')
+                substore_alias = substore.get('alias', '')
+                if sub['_id'] == substore_id or substore_id in sub['_id'].split(','):
                     pincodes = set([pc.strip() for pc in sub.get('pincodes', '').split(',') if pc.strip()])
                     if str(pincode) not in pincodes:
                         pincodes.add(str(pincode))
                         sub['pincodes'] = ','.join(sorted(pincodes))
-                        logger.info(f"[MAPPING] Added pincode {pincode} to substore_id {substore_id} ({sub.get('alias')}) in mapping.")
+                        logger.info(f"[MAPPING] Added pincode {pincode} to substore_id {substore_id} (alias: {sub_alias}) in mapping.")
+                        save_substore_mapping(substore_info)
+                    found = True
+                    break
+                elif sub_alias == substore_alias and substore_alias:
+                    # Update existing substore with matching alias
+                    pincodes = set([pc.strip() for pc in sub.get('pincodes', '').split(',') if pc.strip()])
+                    ids = set([id.strip() for id in sub.get('_id', '').split(',') if id.strip()])
+                    if str(pincode) not in pincodes:
+                        pincodes.add(str(pincode))
+                        sub['pincodes'] = ','.join(sorted(pincodes))
+                    if substore_id not in ids:
+                        ids.add(substore_id)
+                        sub['_id'] = ','.join(sorted(ids))
+                        logger.info(f"[MAPPING] Appended substore_id {substore_id} to alias {substore_alias} with pincode {pincode}.")
                         save_substore_mapping(substore_info)
                     found = True
                     break
             if not found:
-                logger.warning(f"[MAPPING] Substore_id {substore_id} not found in substore_list.py for pincode {pincode}. Creating new entry.")
+                # Create new substore entry using API response data
                 new_entry = {
                     "_id": substore_id,
-                    "name": "Unknown-{}".format(substore_id),
-                    "alias": "substore-{}".format(substore_id[:6]),
+                    "name": substore.get('name', f"Unknown-{substore_id}"),
+                    "alias": substore.get('alias', f"substore-{substore_id[:6]}"),
                     "pincodes": str(pincode)
                 }
                 substore_info.append(new_entry)
-                logger.info(f"[MAPPING] Created new substore entry for substore_id {substore_id} with pincode {pincode}.")
+                logger.info(f"[MAPPING] Created new substore entry for substore_id {substore_id} with pincode {pincode} and alias {new_entry['alias']}.")
                 save_substore_mapping(substore_info)
+        
         if USE_SUBSTORE_CACHE and substore_id:
             return substore_cache[substore_id]
         else:
@@ -169,7 +192,9 @@ async def check_products_for_users():
                 for pc in sub.get('pincodes', '').split(','):
                     pc = pc.strip()
                     if pc:
-                        substore_pincode_map[pc] = sub['_id']
+                        # Use the first substore_id for grouping
+                        substore_id = sub['_id'].split(',')[0].strip() if ',' in sub['_id'] else sub['_id']
+                        substore_pincode_map[pc] = substore_id
             for user in active_users:
                 pincode = str(user.get('pincode'))
                 substore_id = substore_pincode_map.get(pincode)

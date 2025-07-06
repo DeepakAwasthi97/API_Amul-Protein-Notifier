@@ -1,10 +1,14 @@
+# Exclude Python bytecode and cache files
 .venv/
 .env
 *.log
 __pycache__/
 *.pyc
+# Exclude JSON files that store user data
 users.json
+# Exclude log files
 product_check.log
 infojs_debug.log
 # Exclude backup and debug files
 BACKUP_check_products.py
+simple_checker.py

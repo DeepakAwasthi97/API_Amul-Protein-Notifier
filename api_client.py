@@ -86,6 +86,15 @@ def get_tid_and_substore(session, pincode):
         raise Exception(f"No substore found for pincode {pincode}")
     substore = records[0]['substore']
     substore_id = records[0]['_id']
+    # Store raw substore for preferences
+    raw_substore = substore
+    # Normalize substore to a dictionary for return
+    if isinstance(substore, str):
+        logger.warning(f"[SESSION] Substore is a string for pincode {pincode}: {substore}. Converting to dict for return.")
+        substore = {"alias": substore, "name": substore.title() or f"Unknown-{substore_id}"}
+    elif not isinstance(substore, dict):
+        logger.error(f"[SESSION] Unexpected substore type for pincode {pincode}: {type(substore)}. Converting to dict.")
+        substore = {"alias": str(substore), "name": str(substore).title() or f"Unknown-{substore_id}"}
     pref_headers = headers.copy()
     pref_headers["content-type"] = "application/json"
     pref_headers["x-requested-with"] = "XMLHttpRequest"
@@ -95,12 +104,15 @@ def get_tid_and_substore(session, pincode):
     cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
     if cookie_str:
         pref_headers["cookie"] = cookie_str
-    pref_payload = {"data": {"store": substore}}
+    pref_payload = {"data": {"store": raw_substore}}
     pref_url = SETTINGS_URL
-    logger.info(f"[SESSION] Setting preferences for substore: {substore}")
+    logger.info(f"[SESSION] Setting preferences for substore: {raw_substore}")
     pref_resp = session.put(pref_url, headers=pref_headers, data=json.dumps(pref_payload), timeout=10)
     logger.info(f"[SESSION] setPreferences status: {pref_resp.status_code}")
     logger.info(f"[SESSION] setPreferences response (first 300 chars): {pref_resp.text[:300]}")
+    if pref_resp.status_code == 406:
+        logger.error(f"[SESSION] 406 Not Acceptable for setPreferences with payload: {json.dumps(pref_payload)}")
+        raise Exception(f"setPreferences failed with 406 for pincode {pincode}")
     info_url = f"{INFO_URL}?_v={int(time.time()*1000)}"
     logger.info(f"[SESSION] Fetching info.js for session data: {info_url}")
     info_js = session.get(info_url, headers=headers, timeout=10)
@@ -185,8 +197,8 @@ async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, s
                     text = await resp.text()
                     logger.info(f"[SESSION] Product API status for alias '{alias}': {resp.status}")
                     logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {text[:300]}")
-                    if resp.status == 429:
-                        logger.warning(f"429 Too Many Requests for alias '{alias}', attempt {attempt}")
+                    if resp.status == 406:
+                        logger.warning(f"406 Not Acceptable for alias '{alias}', attempt {attempt}")
                         await asyncio.sleep(2 ** attempt)
                         continue
                     if resp.status >= 500:

@@ -63,4 +63,6 @@ def is_product_in_stock(product_data, substore_id):
     except Exception:
         available = 0
     seller_substore_ids = product_data.get("seller_substore_ids", [])
-    return available == 1 and substore_id in seller_substore_ids
+    # Handle comma-separated substore_id
+    substore_ids = [id.strip() for id in substore_id.split(',') if id.strip()] if ',' in substore_id else [substore_id]
+    return available == 1 and any(sid in seller_substore_ids for sid in substore_ids)
