@@ -169,7 +169,7 @@ async def check_products_for_users():
     import logging
     logger = logging.getLogger(__name__)
     from common import read_users_file, PRODUCT_NAME_MAP
-    from config import TELEGRAM_BOT_TOKEN, SEMAPHORE_LIMIT, USE_SUBSTORE_CACHE
+    from config import TELEGRAM_BOT_TOKEN, SEMAPHORE_LIMIT, USE_SUBSTORE_CACHE, EXECUTION_MODE
     from telegram.ext import Application
     users_data = read_users_file()
     debug_pincode = ""
@@ -222,12 +222,55 @@ async def check_products_for_users():
         attempt = 1
         attempts = {k: 0 for k in all_keys}
         passed_on_attempt = {k: None for k in all_keys}
-        from config import EXECUTION_MODE
+        while attempt <= MAX_ATTEMPTS and failed_checks:
+            if attempt == 1:
+                logger.info(f"--- Attempt {attempt} for {len(failed_checks)} total groups ---")
+            else:
+                logger.info(f"--- Attempt {attempt} for {len(failed_checks)} failed groups ---")
 
-        if EXECUTION_MODE == 'Concurrent':
-            tasks = []
-            for key in failed_checks:
-                async def check_and_notify(key=key):
+            if EXECUTION_MODE == 'Concurrent':
+                tasks = []
+                for key in list(failed_checks):
+                    async def check_and_notify(key=key):
+                        try:
+                            attempts[key] += 1
+                            if USE_SUBSTORE_CACHE and key in substore_cache:
+                                product_status = substore_cache[key]
+                                logger.info(f"[CACHE] Used substore cache for group {key}")
+                            else:
+                                group_users = user_groups[key]
+                                pincode = group_users[0].get('pincode')
+                                product_status = await check_product_availability_async(pincode)
+
+                            if product_status is not None:
+                                successfully_checked.add(key)
+                                passed_on_attempt[key] = attempt
+                                users = user_groups[key]
+                                notification_tasks = []
+                                for user in users:
+                                    chat_id = user.get("chat_id")
+                                    products_to_check = user.get("products", [])
+                                    if chat_id and products_to_check:
+                                        task = asyncio.create_task(
+                                            send_telegram_notification_for_user(
+                                                app, chat_id, user.get('pincode'), products_to_check, product_status
+                                            )
+                                        )
+                                        notification_tasks.append(task)
+                                if notification_tasks:
+                                    await asyncio.gather(*notification_tasks, return_exceptions=True)
+                            else:
+                                logger.warning(f"No product status returned for group {key}")
+                        except Exception as e:
+                            logger.error(f"Error checking or notifying for group {key}: {str(e)}")
+
+                    tasks.append(asyncio.create_task(check_and_notify()))
+                
+                await asyncio.gather(*tasks, return_exceptions=True)
+                failed_checks.difference_update(successfully_checked)
+
+            else:  # Sequential execution
+                for key in list(failed_checks):
                     try:
                         attempts[key] += 1
                         if USE_SUBSTORE_CACHE and key in substore_cache:
@@ -240,6 +283,7 @@ async def check_products_for_users():
 
                         if product_status is not None:
                             successfully_checked.add(key)
+                            failed_checks.remove(key)
                             passed_on_attempt[key] = attempt
                             users = user_groups[key]
                             notification_tasks = []
@@ -260,46 +304,9 @@ async def check_products_for_users():
                     except Exception as e:
                         logger.error(f"Error checking or notifying for group {key}: {str(e)}")
 
-                tasks.append(asyncio.create_task(check_and_notify()))
-
-            await asyncio.gather(*tasks, return_exceptions=True)
-            failed_checks = set(all_keys) - successfully_checked
-
-        else:  # Sequential execution
-            current_failed_checks = list(failed_checks)
-            for key in current_failed_checks:
-                try:
-                    attempts[key] += 1
-                    if USE_SUBSTORE_CACHE and key in substore_cache:
-                        product_status = substore_cache[key]
-                        logger.info(f"[CACHE] Used substore cache for group {key}")
-                    else:
-                        group_users = user_groups[key]
-                        pincode = group_users[0].get('pincode')
-                        product_status = await check_product_availability_async(pincode)
-
-                    if product_status is not None:
-                        successfully_checked.add(key)
-                        failed_checks.remove(key)
-                        passed_on_attempt[key] = attempt
-                        users = user_groups[key]
-                        notification_tasks = []
-                        for user in users:
-                            chat_id = user.get("chat_id")
-                            products_to_check = user.get("products", [])
-                            if chat_id and products_to_check:
-                                task = asyncio.create_task(
-                                    send_telegram_notification_for_user(
-                                        app, chat_id, user.get('pincode'), products_to_check, product_status
-                                    )
-                                )
-                                notification_tasks.append(task)
-                        if notification_tasks:
-                            await asyncio.gather(*notification_tasks, return_exceptions=True)
-                    else:
-                        logger.warning(f"No product status returned for group {key}")
-                except Exception as e:
-                    logger.error(f"Error checking or notifying for group {key}: {str(e)}")
+            if failed_checks:
+                logger.warning(f"Groups failed in attempt {attempt}: {[mask(str(k)) for k in sorted(failed_checks)]}")
+            attempt += 1
         for k, att in passed_on_attempt.items():
             if att is not None and att > 1:
                 logger.info(f"Group {mask(str(k))} failed in earlier attempts but passed in attempt {att}")
