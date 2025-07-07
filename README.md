@@ -36,7 +36,7 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
    ```
 
 ## Excluded from Public Repo
-- `users.json`, `substore_list.py`, `.env`, logs, and backup/debug files are excluded for privacy and security.
+- `users.json`, `users.db`, `substore_list.py`, `.env`, logs, and backup/debug files are excluded for privacy and security.
 
 ## License
 Amul Paglu

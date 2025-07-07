@@ -9,10 +9,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 # Local imports
 import common
 import config
+if config.USE_DATABASE:
+    from database import Database
 
 
 logger = common.setup_logging()
 
+if config.USE_DATABASE:
+    db = Database(config.DATABASE_FILE)
 
 def update_users_file(users_data):
     """Update the users.json file in the GitHub repository."""
@@ -96,29 +100,47 @@ async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("PIN code must be a 6-digit number.")
         return
 
-    users_data = common.read_users_file()
-    users = users_data["users"]
-    user = next((u for u in users if u["chat_id"] == str(chat_id)), None)
-
-    if user:
-        user["pincode"] = pincode
-        user["active"] = True
-    else:
-        users.append(
-            {
+    if config.USE_DATABASE:
+        user = db.get_user(chat_id)
+        if user:
+            user["pincode"] = pincode
+            user["active"] = True
+            db.update_user(chat_id, user)
+        else:
+            new_user = {
                 "chat_id": str(chat_id),
                 "pincode": pincode,
                 "products": ["Any"],
                 "active": True,
             }
-        )
-
-    if update_users_file(users_data):
+            db.add_user(chat_id, new_user)
         await update.message.reply_text(
             f"PIN code set to {pincode}. You will receive notifications for available products."
         )
     else:
-        await update.message.reply_text("Failed to update your PIN code. Please try again.")
+        users_data = common.read_users_file()
+        users = users_data["users"]
+        user = next((u for u in users if u["chat_id"] == str(chat_id)), None)
+
+        if user:
+            user["pincode"] = pincode
+            user["active"] = True
+        else:
+            users.append(
+                {
+                    "chat_id": str(chat_id),
+                    "pincode": pincode,
+                    "products": ["Any"],
+                    "active": True,
+                }
+            )
+
+        if update_users_file(users_data):
+            await update.message.reply_text(
+                f"PIN code set to {pincode}. You will receive notifications for available products."
+            )
+        else:
+            await update.message.reply_text("Failed to update your PIN code. Please try again.")
 
 
 async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -126,8 +148,11 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     logger.info("Handling /setproducts command for chat_id %s", common.mask(chat_id))
 
-    users_data = common.read_users_file()
-    user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+    if config.USE_DATABASE:
+        user = db.get_user(chat_id)
+    else:
+        users_data = common.read_users_file()
+        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
 
     if not user:
         await update.message.reply_text(
@@ -175,18 +200,16 @@ async def product_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            users_data = common.read_users_file()
-            user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-            if not user:
-                await query.message.reply_text(
-                    "Please set your PIN code first using /setpincode PINCODE"
-                )
-                return
-
-            user["products"] = selected_products
-            user["active"] = True
-
-            if update_users_file(users_data):
+            if config.USE_DATABASE:
+                user = db.get_user(chat_id)
+                if not user:
+                    await query.message.reply_text(
+                        "Please set your PIN code first using /setpincode PINCODE"
+                    )
+                    return
+                user["products"] = selected_products
+                user["active"] = True
+                db.update_user(chat_id, user)
                 display_products = [common.PRODUCT_NAME_MAP[p] for p in selected_products]
                 await query.message.reply_text(
                     f"You'll get notifications for:\n" + "\n".join(f"- {p}" for p in display_products),
@@ -194,8 +217,29 @@ async def product_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 logger.info("User %s set products: %s", common.mask(chat_id), selected_products)
                 context.user_data.pop("selected_products", None)
+
             else:
-                await query.message.reply_text("Failed to update products. Please try again.")
+                users_data = common.read_users_file()
+                user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+                if not user:
+                    await query.message.reply_text(
+                        "Please set your PIN code first using /setpincode PINCODE"
+                    )
+                    return
+
+                user["products"] = selected_products
+                user["active"] = True
+
+                if update_users_file(users_data):
+                    display_products = [common.PRODUCT_NAME_MAP[p] for p in selected_products]
+                    await query.message.reply_text(
+                        f"You'll get notifications for:\n" + "\n".join(f"- {p}" for p in display_products),
+                        parse_mode="Markdown",
+                    )
+                    logger.info("User %s set products: %s", common.mask(chat_id), selected_products)
+                    context.user_data.pop("selected_products", None)
+                else:
+                    await query.message.reply_text("Failed to update products. Please try again.")
             return
 
         if query.data.startswith("product_"):
@@ -256,18 +300,27 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     logger.info("Handling /stop command for chat_id %s", common.mask(chat_id))
 
-    users_data = common.read_users_file()
-    user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-
-    if not user or not user.get("active", False):
-        await update.message.reply_text("You are not subscribed to notifications.")
-        return
-
-    user["active"] = False
-    if update_users_file(users_data):
+    if config.USE_DATABASE:
+        user = db.get_user(chat_id)
+        if not user or not user.get("active", False):
+            await update.message.reply_text("You are not subscribed to notifications.")
+            return
+        user["active"] = False
+        db.update_user(chat_id, user)
         await update.message.reply_text("Notifications stopped. Use /setpincode to restart.")
     else:
-        await update.message.reply_text("Failed to stop notifications. Please try again.")
+        users_data = common.read_users_file()
+        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+
+        if not user or not user.get("active", False):
+            await update.message.reply_text("You are not subscribed to notifications.")
+            return
+
+        user["active"] = False
+        if update_users_file(users_data):
+            await update.message.reply_text("Notifications stopped. Use /setpincode to restart.")
+        else:
+            await update.message.reply_text("Failed to stop notifications. Please try again.")
 
 
 async def run_polling(app: Application):
@@ -285,6 +338,8 @@ async def run_polling(app: Application):
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+        if config.USE_DATABASE:
+            db.close()
         logger.info("Bot shutdown complete")
 
 

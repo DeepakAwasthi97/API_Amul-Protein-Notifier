@@ -130,39 +130,39 @@ async def check_product_availability_async(pincode):
         logger.error(f"Error checking products for pincode {mask(pincode)}: {str(e)}")
         return []
 
-async def process_pincode_group(app, pincode, users, semaphore):
-    from utils import mask
-    import logging
-    logger = logging.getLogger(__name__)
-    async with semaphore:
-        try:
-            import random
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-            logger.info(f"Processing pincode {mask(pincode)} for {len(users)} users")
-            product_status = await check_product_availability_async(pincode)
-            if not product_status:
-                logger.warning(f"No product status returned for pincode {mask(pincode)}")
-                return False
-            notification_tasks = []
-            for user in users:
-                chat_id = user.get("chat_id")
-                products_to_check = user.get("products", [])
-                if chat_id and products_to_check:
-                    task = asyncio.create_task(
-                        send_telegram_notification_for_user(
-                            app, chat_id, pincode, products_to_check, product_status
-                        )
-                    )
-                    notification_tasks.append(task)
-                else:
-                    logger.warning(f"Skipping user with missing data: chat_id={mask(chat_id)}, products={products_to_check}")
-            if notification_tasks:
-                await asyncio.gather(*notification_tasks, return_exceptions=True)
-                logger.info(f"Completed notifications for pincode {mask(pincode)} - {len(notification_tasks)} users notified")
-            return True
-        except Exception as e:
-            logger.error(f"Error processing pincode {mask(pincode)}: {str(e)}")
-            return False
+# async def process_pincode_group(app, pincode, users, semaphore):
+#     from utils import mask
+#     import logging
+#     logger = logging.getLogger(__name__)
+#     async with semaphore:
+#         try:
+#             import random
+#             await asyncio.sleep(random.uniform(0.5, 2.0))
+#             logger.info(f"Processing pincode {mask(pincode)} for {len(users)} users")
+#             product_status = await check_product_availability_async(pincode)
+#             if not product_status:
+#                 logger.warning(f"No product status returned for pincode {mask(pincode)}")
+#                 return False
+#             notification_tasks = []
+#             for user in users:
+#                 chat_id = user.get("chat_id")
+#                 products_to_check = user.get("products", [])
+#                 if chat_id and products_to_check:
+#                     task = asyncio.create_task(
+#                         send_telegram_notification_for_user(
+#                             app, chat_id, pincode, products_to_check, product_status
+#                         )
+#                     )
+#                     notification_tasks.append(task)
+#                 else:
+#                     logger.warning(f"Skipping user with missing data: chat_id={mask(chat_id)}, products={products_to_check}")
+#             if notification_tasks:
+#                 await asyncio.gather(*notification_tasks, return_exceptions=True)
+#                 logger.info(f"Completed notifications for pincode {mask(pincode)} - {len(notification_tasks)} users notified")
+#             return True
+#         except Exception as e:
+#             logger.error(f"Error processing pincode {mask(pincode)}: {str(e)}")
+#             return False
 
 async def check_products_for_users():
     from utils import mask
@@ -212,7 +212,8 @@ async def check_products_for_users():
                     continue
                 user_groups.setdefault(pincode, []).append(user)
             logger.info(f"Grouped users into {len(user_groups)} unique pincodes")
-        semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
+        if EXECUTION_MODE == 'Concurrent':
+            semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
         import importlib
         MAX_ATTEMPTS = getattr(importlib.import_module('config'), 'MAX_RETRY', 3)
         all_keys = list(user_groups.keys())
@@ -221,11 +222,9 @@ async def check_products_for_users():
         attempt = 1
         attempts = {k: 0 for k in all_keys}
         passed_on_attempt = {k: None for k in all_keys}
-        while attempt <= MAX_ATTEMPTS and failed_checks:
-            if attempt == 1:
-                logger.info(f"--- Attempt {attempt} for {len(failed_checks)} total groups ---")
-            else:
-                logger.info(f"--- Attempt {attempt} for {len(failed_checks)} failed groups ---")
+        from config import EXECUTION_MODE
+
+        if EXECUTION_MODE == 'Concurrent':
             tasks = []
             for key in failed_checks:
                 async def check_and_notify(key=key):
@@ -238,6 +237,7 @@ async def check_products_for_users():
                             group_users = user_groups[key]
                             pincode = group_users[0].get('pincode')
                             product_status = await check_product_availability_async(pincode)
+
                         if product_status is not None:
                             successfully_checked.add(key)
                             passed_on_attempt[key] = attempt
@@ -259,12 +259,47 @@ async def check_products_for_users():
                             logger.warning(f"No product status returned for group {key}")
                     except Exception as e:
                         logger.error(f"Error checking or notifying for group {key}: {str(e)}")
+
                 tasks.append(asyncio.create_task(check_and_notify()))
+
             await asyncio.gather(*tasks, return_exceptions=True)
             failed_checks = set(all_keys) - successfully_checked
-            if failed_checks:
-                logger.warning(f"Groups failed in attempt {attempt}: {[mask(str(k)) for k in sorted(failed_checks)]}")
-            attempt += 1
+
+        else:  # Sequential execution
+            current_failed_checks = list(failed_checks)
+            for key in current_failed_checks:
+                try:
+                    attempts[key] += 1
+                    if USE_SUBSTORE_CACHE and key in substore_cache:
+                        product_status = substore_cache[key]
+                        logger.info(f"[CACHE] Used substore cache for group {key}")
+                    else:
+                        group_users = user_groups[key]
+                        pincode = group_users[0].get('pincode')
+                        product_status = await check_product_availability_async(pincode)
+
+                    if product_status is not None:
+                        successfully_checked.add(key)
+                        failed_checks.remove(key)
+                        passed_on_attempt[key] = attempt
+                        users = user_groups[key]
+                        notification_tasks = []
+                        for user in users:
+                            chat_id = user.get("chat_id")
+                            products_to_check = user.get("products", [])
+                            if chat_id and products_to_check:
+                                task = asyncio.create_task(
+                                    send_telegram_notification_for_user(
+                                        app, chat_id, user.get('pincode'), products_to_check, product_status
+                                    )
+                                )
+                                notification_tasks.append(task)
+                        if notification_tasks:
+                            await asyncio.gather(*notification_tasks, return_exceptions=True)
+                    else:
+                        logger.warning(f"No product status returned for group {key}")
+                except Exception as e:
+                    logger.error(f"Error checking or notifying for group {key}: {str(e)}")
         for k, att in passed_on_attempt.items():
             if att is not None and att > 1:
                 logger.info(f"Group {mask(str(k))} failed in earlier attempts but passed in attempt {att}")

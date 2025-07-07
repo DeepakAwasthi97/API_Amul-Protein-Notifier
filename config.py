@@ -12,11 +12,13 @@ GITHUB_BRANCH = "main"
 
 # --- Concurrency Settings ---
 SEMAPHORE_LIMIT = 1  # Increased from 3 for better parallelization with APIs
-MAX_RETRIES = 1      # Removed retries as APIs are more reliable
+MAX_RETRY = 1      # Removed retries as APIs are more reliable
 
 # --- File Paths ---
 LOG_FILE = "product_check.log"
+DATABASE_FILE = "users.db"
 USERS_FILE = "users.json"
+USE_DATABASE = False  # Set to False to use users.json
 
 # --- API Configuration ---
 BASE_URL = "https://shop.amul.com"
@@ -66,3 +68,6 @@ GLOBAL_PRODUCT_API_RPS = 5  # Lower this if still rate limited
 # Log rotation settings (in bytes and days)
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_OF_DAYS = 3  # 3 days
+
+# --- Execution Mode ---
+EXECUTION_MODE = "Concurrent"  # Can be 'Sequential' or 'Concurrent'
