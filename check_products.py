@@ -2,6 +2,7 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from utils import setup_logging
 from common import is_already_running
 import time
