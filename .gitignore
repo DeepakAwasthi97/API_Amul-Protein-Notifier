@@ -8,7 +8,7 @@ __pycache__/
 users.json
 users.db
 # Exclude log files
-product_check.log
+product_check.log*
 infojs_debug.log
 # Exclude backup and debug files
 BACKUP_check_products.py
