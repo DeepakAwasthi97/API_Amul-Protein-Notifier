@@ -6,6 +6,7 @@ load_dotenv()
 
 # --- Secrets and Environment-Specific ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 GH_PAT = os.getenv("GH_PAT")
 PRIVATE_REPO = os.getenv("PRIVATE_REPO")
 GITHUB_BRANCH = "main"
