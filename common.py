@@ -4,6 +4,7 @@ import logging
 import os
 import psutil
 import requests
+import aiohttp
 
 from config import (
     LOG_FILE,
@@ -63,6 +64,42 @@ PRODUCT_NAME_MAP = {
     "Amul Chocolate Whey Protein, 34 g | Pack of 30 sachets": "🍫🍫 Chocolate Whey 34g | Pack of 30 sachets",
     "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets": "🍫🍫🍫 Chocolate Whey 34g | Pack of 60 sachets",
 }
+
+CATEGORIZED_PRODUCTS = {
+    "Milkshakes & Shakes": [
+        "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30",
+        "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8",
+        "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30",
+        "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 8",
+        "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 30",
+        "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 8",
+        "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 30",
+        "Amul High Protein Blueberry Shake, 200 mL | Pack of 30",
+    ],
+    "Lassi & Buttermilk": [
+        "Amul High Protein Plain Lassi, 200 mL | Pack of 30",
+        "Amul High Protein Rose Lassi, 200 mL | Pack of 30",
+        "Amul High Protein Buttermilk, 200 mL | Pack of 30",
+    ],
+    "Milk": [
+        "Amul High Protein Milk, 250 mL | Pack of 8",
+        "Amul High Protein Milk, 250 mL | Pack of 32",
+    ],
+    "Paneer": [
+        "Amul High Protein Paneer, 400 g | Pack of 24",
+        "Amul High Protein Paneer, 400 g | Pack of 2",
+    ],
+    "Whey Protein (Sachets)": [
+        "Amul Whey Protein Gift Pack, 32 g | Pack of 10 sachets",
+        "Amul Whey Protein, 32 g | Pack of 30 Sachets",
+        "Amul Whey Protein Pack, 32 g | Pack of 60 Sachets",
+        "Amul Chocolate Whey Protein Gift Pack, 34 g | Pack of 10 sachets",
+        "Amul Chocolate Whey Protein, 34 g | Pack of 30 sachets",
+        "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets",
+    ]
+}
+
+CATEGORIES = list(CATEGORIZED_PRODUCTS.keys())
 
 PRODUCT_ALIAS_MAP = {
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30": "amul-kool-protein-milkshake-or-chocolate-180-ml-or-pack-of-30",
@@ -133,23 +170,25 @@ def is_already_running(script_name):
     logger.info("No other running instances found")
     return False
 
-def get_file_sha(path):
+async def get_file_sha(path):
     logger = logging.getLogger(__name__)
     url = f"https://api.github.com/repos/{PRIVATE_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
     headers = {
         "Authorization": f"token {GH_PAT}",
         "Accept": "application/vnd.github+json",
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()["sha"]
-    logger.error(
-        "Could not retrieve SHA for %s: Status %d, Response: %s",
-        path,
-        response.status_code,
-        response.text,
-    )
-    return None
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data["sha"]
+            logger.error(
+                "Could not retrieve SHA for %s: Status %d, Response: %s",
+                path,
+                response.status,
+                await response.text(),
+            )
+            return None
 
 def read_users_file():
     logger = logging.getLogger(__name__)
