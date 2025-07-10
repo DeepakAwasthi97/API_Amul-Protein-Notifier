@@ -3,6 +3,7 @@ import json
 import base64
 import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -12,6 +13,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from datetime import datetime, timedelta
 
 # Local imports
 import common
@@ -25,7 +27,7 @@ if config.USE_DATABASE:
     db = Database(config.DATABASE_FILE)
 
 # Conversation states
-AWAITING_PINCODE = 1
+AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE = range(2)
 
 async def update_users_file(users_data):
     """Update the users.json file in the GitHub repository asynchronously."""
@@ -83,8 +85,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
     chat_id = update.effective_chat.id
     logger.info("Handling /start command for chat_id %s", common.mask(chat_id))
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # 1. Fetch user
     user = None
     users_data = None
     if config.USE_DATABASE:
@@ -93,46 +95,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_data = common.read_users_file()
         user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
 
-    # 2. Check user status
     if user and user.get("pincode"):
         pincode = user.get("pincode")
-        # Case A: User is already active
         if user.get("active"):
             products = user.get("products", ["Any"])
-
-            if len(products) == 1 and products[0].lower() == "any":
-                product_message = "All of the available Amul Protein products"
-            else:
-                display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in products]
-                product_message = "\n".join(f"- {p}" for p in display_products)
-
+            product_message = "All of the available Amul Protein products 🧀" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
             await update.message.reply_text(
-                f"You have already enabled notifications for PIN code {pincode}.\n"
+                f"🎉 You have already enabled notifications for PINCODE {pincode} 📍.\n"
                 f"You are currently tracking:\n{product_message}"
             )
-
-        # Case B: User is inactive (reactivation)
         else:
             user["active"] = True
             if config.USE_DATABASE:
                 db.update_user(chat_id, user)
             else:
                 if not await update_users_file(users_data):
-                    await update.message.reply_text("Failed to re-enable notifications. Please try again.")
+                    await update.message.reply_text("⚠️ Failed to re-enable notifications. Please try again.")
                     return
-
             await update.message.reply_text(
-                f"Welcome back! Notifications have been re-enabled for PIN code {pincode}.\n"
+                f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
                 "Use /stop to pause them again."
             )
-
-    # Case C: New user or user without a pincode
     else:
         await update.message.reply_text(
-            "Welcome to the Amul Protein Items Notifier Bot!\n\n"
-            "Use /setpincode PINCODE to set your pincode (Mandatory).\n"
-            "Use /setproducts to select products (Optional, by default, we will show any Amul protein product which is available for your pincode).\n"
-            "Use /stop to stop notifications."
+            "👋 Welcome to the Amul Protein Items Notifier Bot! 🧀\n\n"
+            "Use /setpincode PINCODE to set your pincode 📍 (Mandatory).\n"
+            "Use /setproducts to select products 🧀 (Optional, defaults to any Amul protein product).\n"
+            "Use /stop to pause notifications ⏸️.\n"
+            "Use /support to report issues or share feedback 📞."
         )
 
 async def _save_pincode(chat_id: int, pincode: str) -> bool:
@@ -162,47 +152,121 @@ async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """Starts the conversation to set a pincode or sets it directly if provided."""
     chat_id = update.effective_chat.id
     logger.info("Handling /setpincode command for chat_id %s", common.mask(chat_id))
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if context.args:
         pincode = context.args[0]
         if not pincode.isdigit() or len(pincode) != 6:
-            await update.message.reply_text("PIN code must be a 6-digit number.")
+            await update.message.reply_text("⚠️ PINCODE must be a 6-digit number.")
             return ConversationHandler.END
 
         if await _save_pincode(chat_id, pincode):
-            await update.message.reply_text(f"PIN code set to {pincode}. You will receive notifications for available products.")
+            await update.message.reply_text(f"✅ PINCODE set to {pincode} 📍. You will receive notifications for available products.")
         else:
-            await update.message.reply_text("Failed to update your PIN code. Please try again.")
+            await update.message.reply_text("⚠️ Failed to update your PINCODE. Please try again.")
         return ConversationHandler.END
     else:
-        await update.message.reply_text("Please send me your 6-digit pincode.")
+        await update.message.reply_text("📍 Please send me your 6-digit pincode.")
         return AWAITING_PINCODE
 
 async def pincode_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the pincode received from the user during a conversation."""
     chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     pincode = update.message.text
 
     if not pincode.isdigit() or len(pincode) != 6:
-        await update.message.reply_text("That doesn't look like a valid 6-digit pincode. Please try again, or use /cancel to stop.")
+        await update.message.reply_text("⚠️ That doesn't look like a valid 6-digit pincode. Please try again, or use /cancel to stop.")
         return AWAITING_PINCODE
 
     if await _save_pincode(chat_id, pincode):
-        await update.message.reply_text(f"Thank you! Your PIN code has been set to {pincode}.")
+        await update.message.reply_text(f"✅ Thank you! Your PINCODE has been set to {pincode} 📍.")
     else:
-        await update.message.reply_text("Failed to set your PIN code. Please try again.")
+        await update.message.reply_text("⚠️ Failed to set your PINCODE. Please try again.")
+    
+    return ConversationHandler.END
+
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the /support command for reporting issues or sending feedback."""
+    chat_id = update.effective_chat.id
+    logger.info("Handling /support command for chat_id %s", common.mask(chat_id))
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    # Check rate limit (1 message every 5 minutes)
+    last_support_time = context.user_data.get("last_support_time")
+    if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
+        await update.message.reply_text("⏳ Please wait a few minutes before sending another support message.")
+        return ConversationHandler.END
+
+    if context.args:
+        message = " ".join(context.args)
+        if len(message) < 5:
+            await update.message.reply_text("⚠️ Your message is too short. Please provide at least 5 characters.")
+            return ConversationHandler.END
+        if len(message) > 500:
+            await update.message.reply_text("⚠️ Your message is too long. Please keep it under 500 characters.")
+            return ConversationHandler.END
+
+        # Send to admin
+        try:
+            await context.bot.send_message(
+                chat_id=config.ADMIN_CHAT_ID,
+                text=f"📞 **Support Message from User {common.mask(chat_id)}**:\n{message}"
+            )
+            context.user_data["last_support_time"] = datetime.now()
+            await update.message.reply_text("✅ Thank you for your feedback! 📞 We've sent it to our team.")
+        except Exception as e:
+            logger.error("Failed to send support message for chat_id %s: %s", common.mask(chat_id), str(e))
+            await update.message.reply_text("⚠️ Failed to send your message. Please try again later.")
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("📞 We're listening! Please send your feedback or issue (at least 5 characters). Use /cancel to stop.")
+        return AWAITING_SUPPORT_MESSAGE
+
+async def support_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the support message received from the user during a conversation."""
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    message = update.message.text
+
+    # Check rate limit (redundant check for safety)
+    last_support_time = context.user_data.get("last_support_time")
+    if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
+        await update.message.reply_text("⏳ Please wait a few minutes before sending another support message.")
+        return ConversationHandler.END
+
+    if len(message) < 5:
+        await update.message.reply_text("⚠️ Your message is too short. Please provide at least 5 characters, or use /cancel to stop.")
+        return AWAITING_SUPPORT_MESSAGE
+    if len(message) > 500:
+        await update.message.reply_text("⚠️ Your message is too long. Please keep it under 500 characters, or use /cancel to stop.")
+        return AWAITING_SUPPORT_MESSAGE
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_CHAT_ID,
+            text=f"📞 **Support Message from User {common.mask(chat_id)}**:\n{message}"
+        )
+        context.user_data["last_support_time"] = datetime.now()
+        await update.message.reply_text("✅ Thank you for your feedback! 📞 We've sent it to our team.")
+    except Exception as e:
+        logger.error("Failed to send support message for chat_id %s: %s", common.mask(chat_id), str(e))
+        await update.message.reply_text("⚠️ Failed to send your message. Please try again later.")
     
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation."""
-    await update.message.reply_text("Action cancelled.")
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    await update.message.reply_text("❌ Action cancelled.")
     return ConversationHandler.END
 
 async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the product selection conversation."""
     chat_id = update.effective_chat.id
     logger.info("Starting product selection for chat_id %s", common.mask(chat_id))
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if config.USE_DATABASE:
         user = db.get_user(chat_id)
@@ -214,13 +278,13 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context.user_data["product_menu_view"] = "main"
     
     keyboard = [
-        [InlineKeyboardButton("Browse by Category", callback_data="products_nav_cat_list")],
-        [InlineKeyboardButton("List All Products", callback_data="products_nav_all")],
-        [InlineKeyboardButton("Track Any Available Product", callback_data="products_confirm_Any")],
+        [InlineKeyboardButton("Browse by Category 🧀", callback_data="products_nav_cat_list")],
+        [InlineKeyboardButton("List All Products 📋", callback_data="products_nav_all")],
+        [InlineKeyboardButton("Track Any Available Product ❗", callback_data="products_confirm_Any")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Please select the products you want to monitor.", reply_markup=reply_markup
+        "🧀 Please select the products you want to monitor.", reply_markup=reply_markup
     )
 
 async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,29 +292,27 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     selected_products = context.user_data.get("selected_products", set())
     action = query.data
     action_for_rendering = action
 
     try:
-        # Handle confirmation before navigating back
         if action == "products_nav_main" and selected_products:
             display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in selected_products]
             product_list_text = "\n".join(f"- {p}" for p in display_products)
             confirmation_text = (
-                "Please confirm your selection of the products to be given notifications for "
-                "or select clear selections and go back to main menu:\n\n" +
+                "🧀 Please confirm your selection of products for notifications:\n\n" +
                 f"{product_list_text}"
             )
             confirmation_keyboard = [
-                [InlineKeyboardButton("Confirm Selection", callback_data="products_confirm_and_back")],
-                [InlineKeyboardButton("Clear Selection & Back to Main Menu", callback_data="products_clear_and_back_to_main")],
+                [InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm_and_back")],
+                [InlineKeyboardButton("❌ Clear Selection & Back to Main Menu", callback_data="products_clear_and_back_to_main")],
             ]
             reply_markup = InlineKeyboardMarkup(confirmation_keyboard)
             await query.edit_message_text(text=confirmation_text, reply_markup=reply_markup)
             return
 
-        # Handle product toggle
         if action.startswith("products_toggle_"):
             product_index = int(action.replace("products_toggle_", ""))
             if product_index < len(common.PRODUCTS):
@@ -261,7 +323,6 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     selected_products.add(product_name)
             action_for_rendering = f"products_view_cat_{context.user_data.get('product_menu_category', '')}" if context.user_data.get("product_menu_view") == "category" else "products_nav_all"
 
-        # Handle clear selection
         elif action == "products_clear":
             current_category = context.user_data.get("product_menu_category")
             if current_category:
@@ -271,7 +332,6 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 selected_products.clear()
             action_for_rendering = f"products_view_cat_{current_category}" if current_category else "products_nav_all"
 
-        # Final actions
         elif action == "products_confirm_Any":
             final_selection = ["Any"]
             if config.USE_DATABASE:
@@ -280,19 +340,19 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 user["active"] = True
                 try:
                     db.update_user(chat_id, user)
-                    await query.edit_message_text("✅ Your selection has been saved. You will now be notified if **Any** of the Amul Protein product is available.")
+                    await query.edit_message_text("✅ Your selection has been saved. You will be notified if **any** Amul Protein product is available ❗.")
                 except Exception as e:
                     logger.error("Database error for chat_id %s: %s", common.mask(chat_id), str(e))
-                    await query.edit_message_text("Failed to save your selection. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selection. Please try again later.")
             else:
                 users_data = common.read_users_file()
                 user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
                 user["products"] = final_selection
                 user["active"] = True
                 if await update_users_file(users_data):
-                    await query.edit_message_text("✅ Your selection has been saved. You will now be notified if **Any** of the Amul Protein product is available.")
+                    await query.edit_message_text("✅ Your selection has been saved. You will be notified if **any** Amul Protein product is available ❗.")
                 else:
-                    await query.edit_message_text("Failed to save your selection. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selection. Please try again later.")
             for key in [k for k in context.user_data if k.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
@@ -307,14 +367,10 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
 
                 current_tracked_products = user.get("products", ["Any"])
-                if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any":
-                    product_message = "All of the available Amul Protein products"
-                else:
-                    display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in current_tracked_products]
-                    product_message = "\n".join(f"- {p}" for p in display_products)
+                product_message = "All of the available Amul Protein products 🧀" if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in current_tracked_products)
 
                 await query.edit_message_text(
-                    f"No products were selected. You are currently tracking:\n{product_message}"
+                    f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
                 )
                 for key in [k for k in context.user_data if k.startswith("product_menu_")]:
                     del context.user_data[key]
@@ -329,10 +385,10 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     db.update_user(chat_id, user)
                     product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection)
-                    await query.edit_message_text(f"Your selections have been saved. You will be notified for:\n{product_message}")
+                    await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
                 except Exception as e:
                     logger.error("Database error for chat_id %s: %s", common.mask(chat_id), str(e))
-                    await query.edit_message_text("Failed to save your selections. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
             else:
                 users_data = common.read_users_file()
                 user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
@@ -340,9 +396,9 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 user["active"] = True
                 if await update_users_file(users_data):
                     product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection)
-                    await query.edit_message_text(f"Your selections have been saved. You will be notified for:\n{product_message}")
+                    await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
                 else:
-                    await query.edit_message_text("Failed to save your selections. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
             for key in [k for k in context.user_data if k.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
@@ -357,10 +413,10 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 try:
                     db.update_user(chat_id, user)
                     product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection)
-                    await query.edit_message_text(f"Your selections have been saved. You will be notified for:\n{product_message}")
+                    await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
                 except Exception as e:
                     logger.error("Database error for chat_id %s: %s", common.mask(chat_id), str(e))
-                    await query.edit_message_text("Failed to save your selections. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
             else:
                 users_data = common.read_users_file()
                 user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
@@ -368,9 +424,9 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 user["active"] = True
                 if await update_users_file(users_data):
                     product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection)
-                    await query.edit_message_text(f"Your selections have been saved. You will be notified for:\n{product_message}")
+                    await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
                 else:
-                    await query.edit_message_text("Failed to save your selections. Please try again later.")
+                    await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
             for key in [k for k in context.user_data if k.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
@@ -389,29 +445,29 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         text = ""
         if action_for_rendering == "products_nav_main":
             context.user_data["product_menu_view"] = "main"
-            text = "Please select the products you want to monitor."
+            text = "🧀 Please select the products you want to monitor."
             keyboard.extend([
-                [InlineKeyboardButton("Browse by Category", callback_data="products_nav_cat_list")],
-                [InlineKeyboardButton("List All Products", callback_data="products_nav_all")],
-                [InlineKeyboardButton("Track Any Available Product", callback_data="products_confirm_Any")],
+                [InlineKeyboardButton("Browse by Category 🧀", callback_data="products_nav_cat_list")],
+                [InlineKeyboardButton("List All Products 📋", callback_data="products_nav_all")],
+                [InlineKeyboardButton("Track Any Available Product ❗", callback_data="products_confirm_Any")],
             ])
         elif action_for_rendering == "products_nav_cat_list":
             context.user_data["product_menu_view"] = "cat_list"
-            text = "Select a category to view products."
+            text = "🧀 Select a category to view products:"
             for category in common.CATEGORIES:
                 keyboard.append([InlineKeyboardButton(category, callback_data=f"products_view_cat_{category}")])
         elif action_for_rendering.startswith("products_view_cat_"):
             category = action_for_rendering.replace("products_view_cat_", "")
             context.user_data["product_menu_view"] = "category"
             context.user_data["product_menu_category"] = category
-            text = f"Products in {category}:"
+            text = f"🧀 Products in {category}:"
             for product_name in common.CATEGORIZED_PRODUCTS[category]:
                 product_index = common.PRODUCTS.index(product_name)
                 selected_marker = "✅ " if product_name in selected_products else ""
                 keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{product_index}")])
         elif action_for_rendering == "products_nav_all":
             context.user_data["product_menu_view"] = "all"
-            text = "Select products to monitor:"
+            text = "🧀 Select products to monitor:"
             for i, product_name in enumerate(common.PRODUCTS):
                 if product_name == "Any": continue
                 selected_marker = "✅ " if product_name in selected_products else ""
@@ -419,8 +475,8 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         if action_for_rendering not in ["products_nav_main", "products_nav_cat_list"]:
             keyboard.append([
-                InlineKeyboardButton("Confirm Selection", callback_data="products_confirm"),
-                InlineKeyboardButton("Clear Selection", callback_data="products_clear"),
+                InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm"),
+                InlineKeyboardButton("❌ Clear Selection", callback_data="products_clear"),
             ])
 
         if context.user_data.get("product_menu_view") == "cat_list":
@@ -435,18 +491,19 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     except Exception as e:
         logger.error("Error in set_products_callback for chat_id %s: %s", common.mask(chat_id), str(e))
-        await query.edit_message_text("An error occurred. Please try again or use /setproducts to restart.")
+        await query.edit_message_text("⚠️ An error occurred. Please try again or use /setproducts to restart.")
         return
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /stop command."""
     chat_id = update.effective_chat.id
     logger.info("Handling /stop command for chat_id %s", common.mask(chat_id))
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if config.USE_DATABASE:
         user = db.get_user(chat_id)
         if not user or not user.get("active", False):
-            await update.message.reply_text("You are not subscribed to notifications.")
+            await update.message.reply_text("⚠️ You are not subscribed to notifications.")
             return
         user["active"] = False
         db.update_user(chat_id, user)
@@ -454,22 +511,23 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_data = common.read_users_file()
         user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
         if not user or not user.get("active", False):
-            await update.message.reply_text("You are not subscribed to notifications.")
+            await update.message.reply_text("⚠️ You are not subscribed to notifications.")
             return
         user["active"] = False
         if not await update_users_file(users_data):
-            await update.message.reply_text("Failed to stop notifications. Please try again.")
+            await update.message.reply_text("⚠️ Failed to stop notifications. Please try again.")
             return
 
-    keyboard = [[InlineKeyboardButton("Re-enable Notifications", callback_data="reactivate")]]
+    keyboard = [[InlineKeyboardButton("🔄 Re-enable Notifications", callback_data="reactivate")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Notifications stopped.", reply_markup=reply_markup)
+    await update.message.reply_text("⏸️ Notifications stopped.", reply_markup=reply_markup)
 
 async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Callback handler for the 'Re-enable Notifications' button."""
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     user = None
     users_data = None
@@ -486,35 +544,36 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 db.update_user(chat_id, user)
             else:
                 if not await update_users_file(users_data):
-                    await query.edit_message_text("Failed to re-enable notifications. Please try again.")
+                    await query.edit_message_text("⚠️ Failed to re-enable notifications. Please try again.")
                     return
         
-        await query.edit_message_text(f"Welcome back! Notifications have been re-enabled for PIN code {user['pincode']}.\nUse /stop to pause them again.")
+        await query.edit_message_text(f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {user['pincode']} 📍.\nUse /setproducts to select your favourite product.")
     else:
-        await query.edit_message_text("Could not find your registration. Please use /start to set up notifications.")
+        await query.edit_message_text("⚠️ Could not find your registration. Please use /start to set up notifications.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /broadcast command."""
     chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     if str(chat_id) != config.ADMIN_CHAT_ID:
-        await update.message.reply_text("You are not authorized to use this command.")
+        await update.message.reply_text("⚠️ You are not authorized to use this command.")
         logger.warning("Unauthorized broadcast attempt by chat_id %s", common.mask(chat_id))
         return
 
     message_to_broadcast = ' '.join(context.args)
     if not message_to_broadcast:
-        await update.message.reply_text("Please provide a message to broadcast. Usage: /broadcast <message>")
+        await update.message.reply_text("⚠️ Please provide a message to broadcast. Usage: /broadcast <message>")
         return
 
     context.user_data['broadcast_message'] = message_to_broadcast
 
     keyboard = [
-        [InlineKeyboardButton("Accept", callback_data='broadcast_accept')],
-        [InlineKeyboardButton("Reject", callback_data='broadcast_reject')],
+        [InlineKeyboardButton("✅ Accept", callback_data='broadcast_accept')],
+        [InlineKeyboardButton("❌ Reject", callback_data='broadcast_reject')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"You are about to send the following message to all active users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm.",
+        f"📢 You are about to send the following message to all active users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm.",
         reply_markup=reply_markup
     )
 
@@ -523,6 +582,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     
     if str(chat_id) != config.ADMIN_CHAT_ID:
         logger.warning("Unauthorized broadcast callback interaction by chat_id %s", common.mask(chat_id))
@@ -531,7 +591,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query.data == 'broadcast_accept':
         message = context.user_data.get('broadcast_message')
         if not message:
-            await query.edit_message_text("Error: Broadcast message not found. Please try again.")
+            await query.edit_message_text("⚠️ Error: Broadcast message not found. Please try again.")
             return
 
         if config.USE_DATABASE:
@@ -551,12 +611,12 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception as e:
                 logger.error("Failed to send broadcast to chat_id %s: %s", common.mask(user['chat_id']), e)
 
-        await query.edit_message_text(f"Broadcast sent to {sent_count} active users.")
+        await query.edit_message_text(f"✅ Broadcast sent to {sent_count} active users 📢.")
         logger.info("Admin %s sent broadcast to %d users.", common.mask(chat_id), sent_count)
         context.user_data.pop('broadcast_message', None)
 
     elif query.data == 'broadcast_reject':
-        await query.edit_message_text("Broadcast canceled.")
+        await query.edit_message_text("❌ Broadcast canceled.")
         logger.info("Admin %s canceled broadcast.", common.mask(chat_id))
         context.user_data.pop("broadcast_message", None)
 
@@ -589,9 +649,13 @@ def main():
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     pincode_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("setpincode", set_pincode)],
+        entry_points=[
+            CommandHandler("setpincode", set_pincode),
+            CommandHandler("support", support),
+        ],
         states={
             AWAITING_PINCODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pincode_received)],
+            AWAITING_SUPPORT_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_message_received)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
