@@ -24,7 +24,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, product_nam
                 if not in_stock_products:
                     message = f"None of the Amul Protein items have been available for a while now for your PINCODE: {pincode}"
                     logger.info(f"All products Sold Out for chat_id {mask(chat_id)}, PINCODE {mask(pincode)}")
-                    # await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                    #await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
                 else:
                     message = f"Available Amul Protein Products for PINCODE {pincode}:\n\n"
                     for name, _ in in_stock_products:
