@@ -134,7 +134,7 @@ def get_tid_and_substore(session, pincode):
         logger.error(f"[SESSION] tid or substore_id not found in info.js JSON for pincode {pincode}")
         raise Exception("tid or substore_id not found in info.js JSON")
     logger.info(f"[SESSION] Session created: tid={tid}, substore_id={substore_id}")
-    return tid, substore, substore_id
+    return tid, substore, substore_id, session.cookies.get_dict()
 
 def fetch_product_data_for_alias(session, tid, substore_id, alias):
     calc_tid = calculate_tid_header(tid)
@@ -172,7 +172,7 @@ def fetch_product_data_for_alias(session, tid, substore_id, alias):
         logger.error(f"[SESSION] Error parsing product API response for alias '{alias}': {str(e)}")
         return []
 
-async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, max_retries=3):
+async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, cookies=None, max_retries=3):
     calc_tid = calculate_tid_header(tid)
     headers = {
         "user-agent": API_HEADERS["user-agent"],
@@ -183,6 +183,10 @@ async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, s
         "x-amul-b2c-access-key": "shop.amul.com",
         "tid": calc_tid
     }
+    if cookies:
+        cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        if cookie_str:
+            headers["cookie"] = cookie_str
     query = {
         "q": json.dumps({"alias": alias}),
         "limit": 1
@@ -197,6 +201,15 @@ async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, s
                     text = await resp.text()
                     logger.info(f"[SESSION] Product API status for alias '{alias}': {resp.status}")
                     logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {text[:300]}")
+                    if resp.status == 401:
+                        logger.warning(f"401 Unauthorized for alias '{alias}', attempt {attempt}")
+                        if attempt < max_retries:
+                            logger.info(f"Retrying with fresh session for alias '{alias}'")
+                            # Return None to trigger session refresh in caller
+                            return None
+                        else:
+                            logger.error(f"Failed to fetch product data for alias '{alias}' after {max_retries} attempts: 401 Unauthorized")
+                            return []
                     if resp.status == 406:
                         logger.warning(f"406 Not Acceptable for alias '{alias}', attempt {attempt}")
                         await asyncio.sleep(2 ** attempt)

@@ -31,7 +31,7 @@ def setup_logging():
     handler = SizeAndTimeRotatingHandler(
         LOG_FILE,
         maxBytes=MAX_FILE_SIZE,
-        backupCount=5,  # Keep last 5 logs
+        backupCount=1,
         when='D',
         interval=MAX_OF_DAYS,
         encoding='utf-8',

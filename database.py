@@ -1,99 +1,110 @@
-
-import sqlite3
-import threading
+import aiosqlite
 import json
 import logging
+import asyncio
 
 class Database:
     def __init__(self, db_file):
         self.db_file = db_file
-        self.lock = threading.Lock()
-        self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
-        self.create_table()
+        self._connection = None
 
-    def create_table(self):
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        chat_id INTEGER PRIMARY KEY,
-                        data TEXT NOT NULL
-                    )
-                """)
-                self.conn.commit()
-                logging.info("Database table 'users' created or already exists.")
-            except sqlite3.Error as e:
-                logging.error(f"Error creating table: {e}")
+    async def _init_db(self):
+        """Initialize the database connection and create the users table."""
+        try:
+            self._connection = await aiosqlite.connect(self.db_file)
+            await self._connection.execute("PRAGMA journal_mode=WAL")
+            await self.create_table()
+            logging.info("Database initialized with WAL mode.")
+        except aiosqlite.Error as e:
+            logging.error(f"Error initializing database: {e}")
+            raise
 
-    def add_user(self, chat_id, user_data):
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                # Use INSERT OR REPLACE to perform an "upsert"
-                cursor.execute("INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)", (chat_id, json.dumps(user_data)))
-                self.conn.commit()
-                logging.info(f"User {chat_id} added or updated in the database.")
-            except sqlite3.Error as e:
-                logging.error(f"Error adding or updating user {chat_id}: {e}")
+    async def create_table(self):
+        """Create the users table if it doesn't exist."""
+        try:
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    chat_id INTEGER PRIMARY KEY,
+                    data TEXT NOT NULL
+                )
+            """)
+            await self._connection.commit()
+            logging.info("Database table 'users' created or already exists.")
+        except aiosqlite.Error as e:
+            logging.error(f"Error creating table: {e}")
+            raise
 
-    def get_user(self, chat_id):
-        with self.lock:
+    async def add_user(self, chat_id, user_data):
+        """Add or update a user in the database."""
+        for attempt in range(3):
             try:
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT data FROM users WHERE chat_id = ?", (chat_id,))
-                row = cursor.fetchone()
+                await self._connection.execute(
+                    "INSERT OR REPLACE INTO users (chat_id, data) VALUES (?, ?)",
+                    (chat_id, json.dumps(user_data))
+                )
+                logging.debug(f"User {chat_id} queued for insertion/update.")
+                return
+            except aiosqlite.Error as e:
+                logging.error(f"Error adding/updating user {chat_id} (attempt {attempt + 1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
+            logging.error(f"Failed to add/update user {chat_id} after 3 attempts.")
+
+    async def commit(self):
+        """Commit pending transactions."""
+        try:
+            await self._connection.commit()
+            logging.debug("Database transaction committed.")
+        except aiosqlite.Error as e:
+            logging.error(f"Error committing transaction: {e}")
+            raise
+
+    async def get_user(self, chat_id):
+        """Retrieve a user from the database."""
+        try:
+            async with self._connection.execute("SELECT data FROM users WHERE chat_id = ?", (chat_id,)) as cursor:
+                row = await cursor.fetchone()
                 if row:
                     return json.loads(row[0])
                 return None
-            except sqlite3.Error as e:
-                logging.error(f"Error getting user {chat_id}: {e}")
-                return None
+        except aiosqlite.Error as e:
+            logging.error(f"Error getting user {chat_id}: {e}")
+            return None
 
-    def update_user(self, chat_id, user_data):
-        with self.lock:
+    async def update_user(self, chat_id, user_data):
+        """Update a user in the database."""
+        for attempt in range(3):
             try:
-                cursor = self.conn.cursor()
-                cursor.execute("UPDATE users SET data = ? WHERE chat_id = ?", (json.dumps(user_data), chat_id))
-                self.conn.commit()
-                logging.info(f"User {chat_id} updated in the database.")
-            except sqlite3.Error as e:
-                logging.error(f"Error updating user {chat_id}: {e}")
+                await self._connection.execute(
+                    "UPDATE users SET data = ? WHERE chat_id = ?",
+                    (json.dumps(user_data), chat_id)
+                )
+                logging.debug(f"User {chat_id} queued for update.")
+                return
+            except aiosqlite.Error as e:
+                logging.error(f"Error updating user {chat_id} (attempt {attempt + 1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
+            logging.error(f"Failed to update user {chat_id} after 3 attempts.")
 
-    def get_all_users(self):
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT data FROM users")
-                rows = cursor.fetchall()
+    async def get_all_users(self):
+        """Retrieve all users from the database."""
+        try:
+            async with self._connection.execute("SELECT data FROM users") as cursor:
+                rows = await cursor.fetchall()
                 return [json.loads(row[0]) for row in rows]
-            except sqlite3.Error as e:
-                logging.error(f"Error getting all users: {e}")
-                return []
+        except aiosqlite.Error as e:
+            logging.error(f"Error getting all users: {e}")
+            return []
 
-    def close(self):
-        self.conn.close()
-        logging.info("Database connection closed.")
-
-# Example usage (optional, for testing)
-# if __name__ == '__main__':
-#     db = Database('users.db')
-#     # Example: Add a user
-#     user_1_data = {"name": "John Doe", "preferences": {"notifications": "on"}}
-#     db.add_user(12345, user_1_data)
-
-#     # Example: Get a user
-#     user = db.get_user(12345)
-#     print("Retrieved user:", user)
-
-#     # Example: Update a user
-#     user_1_data["preferences"]["notifications"] = "off"
-#     db.update_user(12345, user_1_data)
-#     user = db.get_user(12345)
-#     print("Updated user:", user)
-
-#     # Example: Get all users
-#     all_users = db.get_all_users()
-#     print("All users:", all_users)
-
-#     db.close()
+    async def close(self):
+        """Close the database connection."""
+        try:
+            if self._connection:
+                await self._connection.commit()
+                await self._connection.close()
+                logging.info("Database connection closed.")
+                self._connection = None
+        except aiosqlite.Error as e:
+            logging.error(f"Error closing database: {e}")
+            raise
