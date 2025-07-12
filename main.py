@@ -16,6 +16,7 @@ from telegram.ext import (
 from telegram.error import TelegramError
 from datetime import datetime, timedelta
 import time
+import logging
 
 # Local imports
 import common
@@ -24,6 +25,7 @@ if config.USE_DATABASE:
     from database import Database
 
 logger = common.setup_logging()
+logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
 
 # Initialize db as None; it will be set in run_polling if USE_DATABASE is True
 db = None
@@ -119,7 +121,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("⚠️ Failed to re-enable notifications. Please try again.")
                     return
                 context.bot_data["users_data"] = users_data
-            # Animation effect
             message = await update.message.reply_text("⏳ Re-enabling notifications...")
             await asyncio.sleep(0.5)
             try:
@@ -135,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👋 Welcome to the Amul Protein Items Notifier Bot! 🧀\n\n"
             "Use /setpincode PINCODE to set your pincode 📍 (Mandatory).\n"
             "Use /setproducts to select products 🧀 (Optional, defaults to any Amul protein product).\n"
-            "Use /support to report issues or share feedback 📞."
+            "Use /support to report issues or support the project 📞."
         )
 
 async def _save_pincode(chat_id: int, pincode: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -176,7 +177,6 @@ async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await update.message.reply_text("⚠️ PINCODE must be a 6-digit number.")
             return ConversationHandler.END
 
-        # Animation effect
         message = await update.message.reply_text("⏳ Setting PINCODE...")
         await asyncio.sleep(0.5)
         try:
@@ -211,80 +211,47 @@ async def pincode_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the /support command for reporting issues or sending feedback."""
+    """Handles the /support command with a menu for Contact Me and Support Project."""
     chat_id = update.effective_chat.id
     logger.info("Handling /support command for chat_id %s", common.mask(chat_id))
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # Check rate limit (1 message every 5 minutes)
-    last_support_time = context.user_data.get("last_support_time")
-    if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
-        await update.message.reply_text("⏳ Please wait a few minutes before sending another support message.")
-        return ConversationHandler.END
+    keyboard = [
+        [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
+        [InlineKeyboardButton("Support Project 🌟", callback_data="support_project")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("📞 How can we assist you today?", reply_markup=reply_markup)
+    return AWAITING_PRODUCT_SELECTION  # Enter state for callback handling
 
-    # Initialize support_requests in bot_data if not present
-    if "support_requests" not in context.bot_data:
-        context.bot_data["support_requests"] = {}
+async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the support menu callback actions."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    logger.debug("Support callback triggered for chat_id %s with action %s", common.mask(chat_id), query.data)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    if context.args:
-        message = " ".join(context.args)
-        if len(message) < 5:
-            await update.message.reply_text("⚠️ Your message is too short. Please provide at least 5 characters.")
+    action = query.data
+    if action == "support_contact":
+        # Check rate limit (1 message every 5 minutes)
+        last_support_time = context.user_data.get("last_support_time")
+        if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
+            await query.edit_message_text("⏳ Please wait a few minutes before sending another support message.")
             return ConversationHandler.END
-        if len(message) > 500:
-            await update.message.reply_text("⚠️ Your message is too long. Please keep it under 500 characters.")
-            return ConversationHandler.END
 
-        # Animation effect
-        transitional_message = await update.message.reply_text("⏳ Sending your feedback...")
-        await asyncio.sleep(0.5)
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=transitional_message.message_id)
-        except TelegramError as e:
-            logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
-
-        # Get user data
-        user = None
-        if config.USE_DATABASE:
-            user = await db.get_user(chat_id)
-        else:
-            users_data = context.bot_data.get("users_data", common.read_users_file())
-            user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-
-        # Prepare user info for admin
-        user_info = f"Chat ID: {chat_id}\n"
-        user_info += f"Pincode: {user.get('pincode', 'Not set')}\n"
-        products = user.get("products", ["Any"]) if user else ["Any"]
-        product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
-        user_info += f"Tracked Products:\n{product_message}"
-
-        # Store support request
-        request_id = str(int(time.time() * 1000))  # Unique ID based on timestamp
-        context.bot_data["support_requests"][request_id] = {
-            "chat_id": str(chat_id),
-            "message": message,
-            "timestamp": datetime.now()
-        }
-
-        # Send to admin with Reply button
-        try:
-            special_chars = r'_*[]()~`>#+-=|{}.!'
-            escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
-            await context.bot.send_message(
-                chat_id=config.ADMIN_CHAT_ID,
-                text=f"📞 *Support Request*\n\nUser Info:\n{user_info}\n\nMessage:\n{escaped_message}",
-                parse_mode="MarkdownV2",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Reply", callback_data=f"reply_{request_id}")]])
-            )
-            context.user_data["last_support_time"] = datetime.now()
-            await update.message.reply_text("✅ Thank you for your feedback! 📞 We've sent it to our team.")
-        except Exception as e:
-            logger.error("Failed to send support message for chat_id %s: %s", common.mask(chat_id), str(e))
-            await update.message.reply_text("⚠️ Failed to send your message. Please try again later.")
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text("📞 We're listening! Please send your feedback or issue. Use /cancel to stop.")
+        await query.edit_message_text("📞 We're listening! Please send your feedback or issue. Use /cancel to stop.")
         return AWAITING_SUPPORT_MESSAGE
+    elif action == "support_project":
+        # Use a valid URL for the Tip button or remove it if no link is available
+        keyboard = [
+            [InlineKeyboardButton("Give ⭐ on GitHub", url="https://github.com/DeepakAwasthi97/API_Amul-Protein-Notifier")],
+            [InlineKeyboardButton("Tip (chai/coffee) 😊", url="https://buymeacoffee.com/e.bhikhari")]  # Replace with a valid URL or comment out
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("🌟 Support the project:", reply_markup=reply_markup)
+        await query.answer("Support options displayed.")
+        return ConversationHandler.END
 
 async def support_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the support message received from the user during a conversation."""
@@ -460,15 +427,7 @@ async def reply_message_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⚠️ No user selected for reply. Please start over.")
         return ConversationHandler.END
 
-    # Animation effect
-    transitional_message = await update.message.reply_text("⏳ Sending reply...")
-    await asyncio.sleep(0.5)
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=transitional_message.message_id)
-    except TelegramError as e:
-        logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
-
-    # Send reply to user with MarkdownV2 formatting
+    # Send reply as a new message without animation
     try:
         special_chars = r'_*[]()~`>#+-=|{}.!'
         escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in reply_message)
@@ -491,7 +450,6 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     
-    # Animation effect
     message = await update.message.reply_text("❌ Cancelling...")
     await asyncio.sleep(0.5)
     try:
@@ -975,7 +933,6 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Handling /stop command for chat_id %s", common.mask(chat_id))
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # Animation effect
     message = await update.message.reply_text("⏳ Stopping notifications...")
     await asyncio.sleep(0.5)
     try:
@@ -1187,7 +1144,10 @@ def main():
         states={
             AWAITING_PINCODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pincode_received)],
             AWAITING_SUPPORT_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_message_received)],
-            AWAITING_PRODUCT_SELECTION: [CallbackQueryHandler(set_products_callback, pattern='^products_')],
+            AWAITING_PRODUCT_SELECTION: [
+                CallbackQueryHandler(support_callback, pattern='^support_'),
+                CallbackQueryHandler(set_products_callback, pattern='^products_')
+            ],
             AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reply_message_received)],
         },
         fallbacks=[
@@ -1202,6 +1162,7 @@ def main():
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CallbackQueryHandler(reactivate_callback, pattern='^reactivate$'))
     app.add_handler(CallbackQueryHandler(broadcast_callback, pattern='^broadcast_'))
+    app.add_handler(CommandHandler("broadcast", broadcast))  # Add broadcast command handler
 
     asyncio.run(run_polling(app))
 
