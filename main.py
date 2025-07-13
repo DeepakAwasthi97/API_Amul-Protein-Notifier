@@ -1026,13 +1026,22 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['broadcast_message'] = message_to_broadcast
 
+    # Function to escape MarkdownV2 special characters
+    def escape_markdown(text):
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
+        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+
+    # Escape the entire message, including the template
+    base_text = f"📢 You are about to send the following message to all active users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm."
+    escaped_full_text = escape_markdown(base_text)
+
     keyboard = [
         [InlineKeyboardButton("✅ Accept", callback_data='broadcast_accept')],
         [InlineKeyboardButton("❌ Reject", callback_data='broadcast_reject')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"📢 You are about to send the following message to all active users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm.",
+        escaped_full_text,
         parse_mode="MarkdownV2",
         reply_markup=reply_markup
     )
@@ -1065,7 +1074,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         # Escape MarkdownV2 special characters
-        special_chars = r'_*[]()~`>#+-=|{}.!'
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
         escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
 
         if config.USE_DATABASE:
