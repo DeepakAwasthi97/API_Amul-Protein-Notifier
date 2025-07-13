@@ -291,6 +291,17 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
     user_info += f"Tracked Products:\n{product_message}"
 
+    # Escape the user's message and user_info
+    def escape_markdown(text):
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
+        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+
+    escaped_user_info = escape_markdown(user_info)
+    escaped_user_message = escape_markdown(message)
+
+    # Construct the message with unescaped newlines in the template
+    base_text = f"📞 *Support Request*\n\nUser Info:\n{escaped_user_info}\n\nMessage:\n{escaped_user_message}"
+
     # Store support request
     request_id = str(int(time.time() * 1000))  # Unique ID based on timestamp
     context.bot_data["support_requests"][request_id] = {
@@ -301,18 +312,16 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
 
     # Send to admin with Reply button
     try:
-        special_chars = r'_*[]()~`>#+-=|{}.!'
-        escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
         await context.bot.send_message(
             chat_id=config.ADMIN_CHAT_ID,
-            text=f"📞 *Support Request*\n\nUser Info:\n{user_info}\n\nMessage:\n{escaped_message}",
+            text=base_text,
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Reply", callback_data=f"reply_{request_id}")]])
         )
         context.user_data["last_support_time"] = datetime.now()
         await update.message.reply_text("✅ Thank you for your feedback! 📞 We've sent it to our team.")
     except Exception as e:
-        logger.error("Failed to send support message for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.error(f"Failed to send support message for chat_id {chat_id}: {str(e)}")
         await update.message.reply_text("⚠️ Failed to send your message. Please try again later.")
     
     return ConversationHandler.END
@@ -372,77 +381,92 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"⚠️ Failed to send reply to {target_chat_id}. The user may have blocked the bot or the chat_id is invalid.")
 
 async def reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the 'Reply' button click by the admin to initiate a reply conversation."""
+    """Handles the reply action for a support request."""
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if str(chat_id) != config.ADMIN_CHAT_ID:
-        logger.warning("Unauthorized reply attempt by chat_id %s", common.mask(chat_id))
-        await query.edit_message_text("⚠️ You are not authorized to use this command.")
+        logger.warning(f"Unauthorized reply attempt by chat_id {chat_id}")
         return ConversationHandler.END
 
     request_id = query.data.replace("reply_", "")
-    support_request = context.bot_data.get("support_requests", {}).get(request_id)
-    if not support_request:
-        await query.edit_message_text("⚠️ Support request not found or expired.")
-        return ConversationHandler.END
+    support_request = context.bot_data["support_requests"].get(request_id)
 
-    context.user_data["reply_chat_id"] = support_request["chat_id"]
-    try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=query.message.message_id,
-            text=f"📝 Please enter your reply for user {support_request['chat_id']}."
-        )
-    except TelegramError as e:
-        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+    if not support_request:
+        # Send a new message instead of editing the original
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📝 Please enter your reply for user {support_request['chat_id']}."
+            text="⚠️ Support request not found. Please start over."
         )
+        return ConversationHandler.END
+
+    user_chat_id = support_request["chat_id"]
+    context.user_data["last_callback_data"] = request_id  # Store request_id for the reply state
+    
+    # Send a new message for the reply prompt
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📝 Enter your reply to send to chat_id {user_chat_id}. Use /cancel to stop.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_reply")]])
+    )
+    
     return AWAITING_ADMIN_REPLY
 
-async def reply_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the admin's reply message to the user via callback conversation."""
+async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the admin's reply message and sends it to the user."""
     chat_id = update.effective_chat.id
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    message = update.message.text
 
-    if str(chat_id) != config.ADMIN_CHAT_ID:
-        logger.warning("Unauthorized reply attempt by chat_id %s", common.mask(chat_id))
-        await update.message.reply_text("⚠️ You are not authorized to use this command.")
+    if message == "/cancel":
+        await update.message.reply_text("❌ Reply canceled.")
+        context.user_data.pop("last_callback_data", None)  # Clear on manual cancel
         return ConversationHandler.END
 
-    reply_message = update.message.text
-    if len(reply_message) < 5:
-        await update.message.reply_text("⚠️ Your reply is too short. Please provide at least 5 characters, or use /cancel to stop.")
-        return AWAITING_ADMIN_REPLY
-    if len(reply_message) > 4096:
-        await update.message.reply_text("⚠️ Your reply is too long. Please keep it under 4096 characters, or use /cancel to stop.")
+    if len(message) > 4096:
+        await update.message.reply_text("⚠️ Reply too long. Please keep it under 4096 characters.")
         return AWAITING_ADMIN_REPLY
 
-    target_chat_id = context.user_data.get("reply_chat_id")
-    if not target_chat_id:
-        await update.message.reply_text("⚠️ No user selected for reply. Please start over.")
+    # Retrieve the request_id from context
+    request_id = context.user_data.get("last_callback_data")
+    if not request_id:
+        await update.message.reply_text("⚠️ No active reply session. Please use the 'Reply' button to start.")
         return ConversationHandler.END
 
-    # Send reply as a new message without animation
+    support_request = context.bot_data["support_requests"].get(request_id)
+
+    if not support_request:
+        await update.message.reply_text("⚠️ Support request not found. Please start over.")
+        context.user_data.pop("last_callback_data", None)
+        return ConversationHandler.END
+
+    user_chat_id = support_request["chat_id"]
+
     try:
-        special_chars = r'_*[]()~`>#+-=|{}.!'
-        escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in reply_message)
         await context.bot.send_message(
-            chat_id=target_chat_id,
-            text=f"📩 *Reply from Support Team*:\n\n{escaped_message}",
+            chat_id=user_chat_id,
+            text=f"📩 *Admin Reply*:\n\n{message}",
             parse_mode="MarkdownV2"
         )
-        await update.message.reply_text(f"✅ Reply sent to user {target_chat_id}.")
-    except TelegramError as e:
-        logger.error("Failed to send reply to chat_id %s: %s", common.mask(target_chat_id), str(e))
-        await update.message.reply_text(f"⚠️ Failed to send reply to {target_chat_id}. The user may have blocked the bot or the chat_id is invalid.")
+        await update.message.reply_text(f"✅ Reply sent to chat_id {user_chat_id}.")
+        logger.info(f"Admin {chat_id} sent reply to chat_id {user_chat_id}")
+        del context.bot_data["support_requests"][request_id]
+        context.user_data.pop("last_callback_data", None)  # Clear after successful reply
+    except Exception as e:
+        logger.error(f"Failed to send reply to chat_id {user_chat_id}: {str(e)}")
+        await update.message.reply_text("⚠️ Failed to send reply. Please try again.")
 
-    # Clean up
-    context.user_data.pop("reply_chat_id", None)
+    return ConversationHandler.END
+
+async def cancel_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the cancellation of the reply action."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    await query.edit_message_text("❌ Reply action canceled.")
+    # Clear the last_callback_data to prevent the next message from being treated as a reply
+    context.user_data.pop("last_callback_data", None)
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1046,6 +1070,22 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+async def send_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job function to send a broadcast message to a single user."""
+    job_data = context.job.data  # Changed from context.job.context to context.job.data
+    chat_id = job_data["chat_id"]
+    message = job_data["message"]
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode="MarkdownV2"
+        )
+        logger.info("Broadcast sent to chat_id %s", common.mask(chat_id))
+    except Exception as e:
+        logger.error("Failed to send broadcast to chat_id %s: %s", common.mask(chat_id), str(e))
+
 async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Callback handler for broadcast confirmation with animation effect."""
     query = update.callback_query
@@ -1073,7 +1113,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text("⚠️ Error: Broadcast message not found. Please try again.")
             return
 
-        # Escape MarkdownV2 special characters
+        # Escape the broadcast message
         special_chars = r'_*[]()~`>#+-=|{}.!-'
         escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
 
@@ -1086,20 +1126,18 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             active_users = [user for user in all_users if user.get('active')]
         
         sent_count = 0
-        for user in active_users:
-            try:
-                await context.bot.send_message(
-                    chat_id=user['chat_id'],
-                    text=escaped_message,
-                    parse_mode="MarkdownV2"
-                )
-                sent_count += 1
-                await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error("Failed to send broadcast to chat_id %s: %s", common.mask(user['chat_id']), e)
+        delay = 0.1  # Delay between sends to respect Telegram API limits (adjust as needed)
 
-        await query.edit_message_text(f"✅ Broadcast sent to {sent_count} active users 📢.")
-        logger.info("Admin %s sent broadcast to %d users.", common.mask(chat_id), sent_count)
+        for user in active_users:
+            context.job_queue.run_once(
+                send_broadcast_job,
+                when=delay * sent_count,
+                data={"chat_id": user['chat_id'], "message": escaped_message}  # Changed 'context' to 'data'
+            )
+            sent_count += 1
+
+        await query.edit_message_text(f"✅ Broadcast queued for {sent_count} active users 📢. It will be sent in the background.")
+        logger.info("Admin %s queued broadcast to %d users.", common.mask(chat_id), sent_count)
         context.user_data.pop('broadcast_message', None)
 
     elif query.data == 'broadcast_reject':
@@ -1157,7 +1195,7 @@ def main():
                 CallbackQueryHandler(support_callback, pattern='^support_'),
                 CallbackQueryHandler(set_products_callback, pattern='^products_')
             ],
-            AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reply_message_received)],
+            AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply_received)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
@@ -1167,6 +1205,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reply", reply))  # Add direct /reply command
+    app.add_handler(CallbackQueryHandler(cancel_reply_callback, pattern='^cancel_reply$'))
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CallbackQueryHandler(reactivate_callback, pattern='^reactivate$'))
