@@ -68,7 +68,7 @@ GLOBAL_PRODUCT_API_RPS = 5  # Lower this if still rate limited
 # --- Logging and Monitoring ---
 # Log rotation settings (in bytes and days)
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
-MAX_OF_DAYS = 3  # 3 days
+MAX_OF_DAYS = 1  # 3 days
 
 # --- Execution Mode ---
 EXECUTION_MODE = "Concurrent"  # Can be 'Sequential' or 'Concurrent'
