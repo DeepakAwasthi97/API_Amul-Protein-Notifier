@@ -1082,80 +1082,94 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("⚠️ Could not find your registration. Please use /start to set up notifications.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-       chat_id = update.effective_chat.id
-       await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-       if str(chat_id) != config.ADMIN_CHAT_ID:
-           await update.message.reply_text("⚠️ You are not authorized to use this command.")
-           return
+    if str(chat_id) != config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⚠️ You are not authorized to use this command.")
+        return
 
-       # Parse the command and message
-       args = update.message.text.split(maxsplit=1)
-       if len(args) < 2:
-           await update.message.reply_text("⚠️ Usage: /broadcast <ALL|active|inactive> <message>")
-           return
+    # Get the full message text
+    full_text = update.message.text
+    if not full_text or len(full_text) <= len("/broadcast"):
+        await update.message.reply_text("⚠️ Usage: /broadcast <message> or /broadcast <ALL|active|inactive> <message>")
+        return
 
-       target_group = args[0].lower().replace("/broadcast", "").strip()
-       message_to_broadcast = args[1].strip()
+    # Parse the target group and message
+    parts = full_text[len("/broadcast"):].strip().split(maxsplit=1)
+    target_group = "active"  # Default target group
+    message_to_broadcast = full_text[len("/broadcast"):].strip()
 
-       if len(message_to_broadcast) > 4096:
-           await update.message.reply_text("⚠️ Message too long. Please keep it under 4096 characters.")
-           return
+    if len(parts) > 1:
+        potential_target = parts[0].lower().strip()
+        if potential_target in ["all", "active", "inactive"]:
+            target_group = potential_target
+            message_to_broadcast = parts[1].strip()
+        else:
+            message_to_broadcast = full_text[len("/broadcast"):].strip()
+    elif len(parts) == 1 and parts[0].lower().strip() in ["all", "active", "inactive"]:
+        target_group = parts[0].lower().strip()
+        message_to_broadcast = ""  # User needs to provide a message
 
-       # Determine target users based on parameter
-       if config.USE_DATABASE:
-           all_users = await db.get_all_users()
-           if not all_users or not isinstance(all_users, list):
-               logger.error("get_all_users returned invalid data: %s", all_users)
-               await update.message.reply_text("⚠️ Error fetching users from database.")
-               return
-           for user in all_users:
-               if not all(k in user for k in ['chat_id', 'active', 'pincode', 'products']):
-                   logger.warning("User data missing expected keys: %s", user)
-       else:
-           users_data = context.bot_data.get("users_data", common.read_users_file())
-           all_users = users_data.get("users", [])
-           if not all_users or not isinstance(all_users, list):
-               logger.error("users.json data invalid: %s", all_users)
-               await update.message.reply_text("⚠️ Error fetching users from JSON.")
-               return
+    if not message_to_broadcast:
+        await update.message.reply_text("⚠️ Please provide a message to broadcast.")
+        return
 
-       target_users = []
-       if target_group == "all":
-           target_users = all_users
-       elif target_group == "active":
-           target_users = [user for user in all_users if user.get('active', False)]
-       elif target_group == "inactive":
-           target_users = [user for user in all_users if not user.get('active', False)]
-       else:
-           await update.message.reply_text("⚠️ Invalid target group. Use ALL, active, or inactive.")
-           return
+    if len(message_to_broadcast) > 4096:
+        await update.message.reply_text("⚠️ Message too long. Please keep it under 4096 characters.")
+        return
 
-       if not target_users:
-           await update.message.reply_text("⚠️ No users found for the selected target group.")
-           return
+    # Determine target users based on parameter
+    if config.USE_DATABASE:
+        all_users = await db.get_all_users()
+        if not all_users or not isinstance(all_users, list):
+            logger.error("get_all_users returned invalid data: %s", all_users)
+            await update.message.reply_text("⚠️ Error fetching users from database.")
+            return
+        for user in all_users:
+            if not all(k in user for k in ['chat_id', 'active', 'pincode', 'products']):
+                logger.warning("User data missing expected keys: %s", user)
+    else:
+        users_data = context.bot_data.get("users_data", common.read_users_file())
+        all_users = users_data.get("users", [])
+        if not all_users or not isinstance(all_users, list):
+            logger.error("users.json data invalid: %s", all_users)
+            await update.message.reply_text("⚠️ Error fetching users from JSON.")
+            return
 
-       context.user_data['broadcast_message'] = message_to_broadcast
-       context.user_data['broadcast_target'] = target_group
+    target_users = []
+    if target_group == "all":
+        target_users = all_users
+    elif target_group == "active":
+        target_users = [user for user in all_users if user.get('active', False)]
+    elif target_group == "inactive":
+        target_users = [user for user in all_users if not user.get('active', False)]
 
-       # Escape the broadcast message
-       def escape_markdown(text):
-           special_chars = r'_*[]()~`>#+-=|{}.!-'
-           return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+    if not target_users:
+        await update.message.reply_text("⚠️ No users found for the selected target group.")
+        return
 
-       base_text = f"📢 You are about to send the following message to {target_group} users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm."
-       escaped_full_text = escape_markdown(base_text)
+    context.user_data['broadcast_message'] = message_to_broadcast
+    context.user_data['broadcast_target'] = target_group
 
-       keyboard = [
-           [InlineKeyboardButton("✅ Accept", callback_data='broadcast_accept')],
-           [InlineKeyboardButton("❌ Reject", callback_data='broadcast_reject')],
-       ]
-       reply_markup = InlineKeyboardMarkup(keyboard)
-       await update.message.reply_text(
-           escaped_full_text,
-           parse_mode="MarkdownV2",
-           reply_markup=reply_markup
-       )
+    # Escape the broadcast message
+    def escape_markdown(text):
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
+        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+
+    base_text = f"📢 You are about to send the following message to {target_group} users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm."
+    escaped_full_text = escape_markdown(base_text)
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Accept", callback_data='broadcast_accept')],
+        [InlineKeyboardButton("❌ Reject", callback_data='broadcast_reject')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        escaped_full_text,
+        parse_mode="MarkdownV2",
+        reply_markup=reply_markup
+    )
 
 async def send_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
        job_data = context.job.data
