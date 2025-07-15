@@ -90,7 +90,7 @@ async def update_users_file(users_data, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
     chat_id = update.effective_chat.id
-    logger.info("Handling /start command for chat_id %s", common.mask(chat_id))
+    logger.info("Handling /start command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     user = None
@@ -128,7 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except TelegramError as e:
-                logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+                logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
             await update.message.reply_text(
                 f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
                 "Use /stop to pause them again."
@@ -170,7 +170,7 @@ async def _save_pincode(chat_id: int, pincode: str, context: ContextTypes.DEFAUL
 async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation to set a pincode or sets it directly if provided."""
     chat_id = update.effective_chat.id
-    logger.info("Handling /setpincode command for chat_id %s", common.mask(chat_id))
+    logger.info("Handling /setpincode command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if context.args:
@@ -184,7 +184,7 @@ async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
         except TelegramError as e:
-            logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+            logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
         if await _save_pincode(chat_id, pincode, context):
             await update.message.reply_text(f"✅ PINCODE set to {pincode} 📍. You will receive notifications for available products.")
@@ -215,7 +215,7 @@ async def pincode_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the /support command with a menu for Contact Me and Support Project."""
     chat_id = update.effective_chat.id
-    logger.info("Handling /support command for chat_id %s", common.mask(chat_id))
+    logger.info("Handling /support command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     keyboard = [
@@ -231,14 +231,14 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
-    logger.debug("Support callback triggered for chat_id %s with action %s", common.mask(chat_id), query.data)
+    logger.debug("Support callback triggered for chat_id %s with action %s", chat_id, query.data)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     action = query.data
     if action == "support_contact":
-        # Check rate limit (1 message every 5 minutes)
+        # Check rate limit (1 message every 1 minutes)
         last_support_time = context.user_data.get("last_support_time")
-        if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
+        if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
             await query.edit_message_text("⏳ Please wait a few minutes before sending another support message.")
             return ConversationHandler.END
 
@@ -282,9 +282,9 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     message = update.message.text
 
-    # Check rate limit (aligned to 5 minutes for consistency)
+    # Check rate limit (aligned to 1 minutes for consistency)
     last_support_time = context.user_data.get("last_support_time")
-    if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=5):
+    if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
         await update.message.reply_text("⏳ Please wait a few minutes before sending another support message.")
         return ConversationHandler.END
 
@@ -296,7 +296,7 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
         return AWAITING_SUPPORT_MESSAGE
 
     # Log the support message
-    logger.info("User chat_id %s sent support message: %s", common.mask(chat_id), message)
+    logger.info("User chat_id %s sent support message: %s", chat_id, message)
 
     # Initialize support_requests in bot_data if not present
     if "support_requests" not in context.bot_data:
@@ -358,16 +358,24 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if str(chat_id) != config.ADMIN_CHAT_ID:
-        logger.warning("Unauthorized reply attempt by chat_id %s", common.mask(chat_id))
+        logger.warning("Unauthorized reply attempt by chat_id %s", chat_id)
         await update.message.reply_text("⚠️ You are not authorized to use this command.")
         return
 
-    if len(context.args) < 2:
+    # Get the full message text
+    full_text = update.message.text
+    if not full_text or len(full_text) <= len("/reply"):
         await update.message.reply_text("⚠️ Usage: /reply <chat_id> <message>")
         return
 
-    target_chat_id = context.args[0]
-    message = " ".join(context.args[1:])
+    # Parse chat_id and message
+    parts = full_text[len("/reply"):].strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].strip():
+        await update.message.reply_text("⚠️ Usage: /reply <chat_id> <message>")
+        return
+
+    target_chat_id = parts[0].strip()
+    message = parts[1].strip() if len(parts) > 1 else ""
 
     # Validate chat_id
     try:
@@ -390,20 +398,25 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=transitional_message.message_id)
     except TelegramError as e:
-        logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
-    # Send reply to user with MarkdownV2 formatting
+    # Escape special characters for MarkdownV2
+    def escape_markdown(text):
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
+        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+
+    escaped_message = escape_markdown(message)
+
+    # Send reply to user with MarkdownV2 formatting, preserving newlines
     try:
-        special_chars = r'_*[]()~`>#+-=|{}.!'
-        escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
         await context.bot.send_message(
             chat_id=target_chat_id,
-            text=f"📩 *Reply from Support Team*:\n\n{escaped_message}",
+            text=f"📩 *Response from Admin*:\n\n{escaped_message}",
             parse_mode="MarkdownV2"
         )
         await update.message.reply_text(f"✅ Reply sent to user {target_chat_id}.")
     except TelegramError as e:
-        logger.error("Failed to send reply to chat_id %s: %s", common.mask(target_chat_id), str(e))
+        logger.error("Failed to send reply to chat_id %s: %s", target_chat_id, str(e))
         await update.message.reply_text(f"⚠️ Failed to send reply to {target_chat_id}. The user may have blocked the bot or the chat_id is invalid.")
 
 async def reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -488,10 +501,17 @@ async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYP
 
     user_chat_id = support_request["chat_id"]
 
+    # Escape special characters for MarkdownV2
+    def escape_markdown(text):
+        special_chars = r'_*[]()~`>#+-=|{}.!-'
+        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
+
+    escaped_message = escape_markdown(message)
+
     try:
         await context.bot.send_message(
             chat_id=user_chat_id,
-            text=f"📩 *Admin Reply*:\n\n{message}",
+            text=f"📩 *Response from Admin*:\n\n{escaped_message}",
             parse_mode="MarkdownV2"
         )
         await update.message.reply_text(f"✅ Reply sent to chat_id {user_chat_id} (Request ID: {request_id}).")
@@ -530,7 +550,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except TelegramError as e:
-        logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
     # Clear product selection and reply state
     for key in ["selected_products", "product_menu_view", "product_menu_category", "cached_user", "reply_sessions"]:
@@ -552,7 +572,7 @@ async def cleanup_support_requests(context: ContextTypes.DEFAULT_TYPE):
 async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the product selection conversation, clearing previous state."""
     chat_id = update.effective_chat.id
-    logger.info("Starting product selection for chat_id %s", common.mask(chat_id))
+    logger.info("Starting product selection for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     start_time = time.time()
 
@@ -580,7 +600,7 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await update.message.reply_text(
         "🧀 Please select the products you want to monitor.", reply_markup=reply_markup
     )
-    logger.info("set_products took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+    logger.info("set_products took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
     return AWAITING_PRODUCT_SELECTION
 
 async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -595,7 +615,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if "selected_products" not in context.user_data:
         context.user_data["selected_products"] = set()
     selected_products = context.user_data["selected_products"]
-    logger.debug("Selected products for chat_id %s: %s", common.mask(chat_id), selected_products)
+    logger.debug("Selected products for chat_id %s: %s", chat_id, selected_products)
 
     action = query.data
     action_for_rendering = action
@@ -606,7 +626,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             product_list_text = "\n".join(f"- {p}" for p in display_products if p)
             if not product_list_text:
                 product_list_text = "No valid products selected."
-                logger.warning("No valid products in display_products for chat_id %s: %s", common.mask(chat_id), display_products)
+                logger.warning("No valid products in display_products for chat_id %s: %s", chat_id, display_products)
             confirmation_text = (
                 "🧀 Please confirm your selection of products for notifications:\n\n" +
                 f"{product_list_text}"
@@ -617,14 +637,14 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             ]
             reply_markup = InlineKeyboardMarkup(confirmation_keyboard)
             await query.edit_message_text(text=confirmation_text, reply_markup=reply_markup)
-            logger.info("Confirmation menu rendered in %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+            logger.info("Confirmation menu rendered in %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
             return AWAITING_PRODUCT_SELECTION
 
         if action.startswith("products_toggle_"):
             try:
                 product_index = int(action.replace("products_toggle_", ""))
                 if product_index < 0 or product_index >= len(common.PRODUCTS):
-                    logger.error("Invalid product_index %d for chat_id %s", product_index, common.mask(chat_id))
+                    logger.error("Invalid product_index %d for chat_id %s", product_index, chat_id)
                     try:
                         await context.bot.edit_message_text(
                             chat_id=chat_id,
@@ -638,7 +658,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
                         )
                     except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
@@ -649,9 +669,9 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     selected_products.remove(product_name)
                 else:
                     selected_products.add(product_name)
-                logger.debug("Toggled product %s for chat_id %s, new selected_products: %s", product_name, common.mask(chat_id), selected_products)
+                logger.debug("Toggled product %s for chat_id %s, new selected_products: %s", product_name, chat_id, selected_products)
             except ValueError:
-                logger.error("Invalid product_toggle action for chat_id %s: %s", common.mask(chat_id), action)
+                logger.error("Invalid product_toggle action for chat_id %s: %s", chat_id, action)
                 try:
                     await context.bot.edit_message_text(
                         chat_id=chat_id,
@@ -665,7 +685,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
                     )
                 except TelegramError as e:
-                    logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                    logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
@@ -702,14 +722,14 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="products_nav_main")])
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(text=text, reply_markup=reply_markup)
-                logger.info("Clear selection (no products) took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+                logger.info("Clear selection (no products) took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
                 return AWAITING_PRODUCT_SELECTION
             if current_category:
                 products_to_clear = set(common.CATEGORIZED_PRODUCTS[current_category])
                 selected_products -= products_to_clear
             else:
                 selected_products.clear()
-            logger.debug("Cleared products for chat_id %s, new selected_products: %s", common.mask(chat_id), selected_products)
+            logger.debug("Cleared products for chat_id %s, new selected_products: %s", chat_id, selected_products)
             action_for_rendering = f"products_view_cat_{current_category}" if current_category else "products_nav_all"
 
         elif action == "products_confirm_Any":
@@ -717,7 +737,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             user = context.user_data.get("cached_user", {})
             user["products"] = final_selection
             user["active"] = True
-            logger.debug("Confirm Any for chat_id %s, final_selection: %s", common.mask(chat_id), final_selection)
+            logger.debug("Confirm Any for chat_id %s, final_selection: %s", chat_id, final_selection)
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
@@ -726,7 +746,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 await asyncio.sleep(0.5)
             except TelegramError as e:
-                logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
             if config.USE_DATABASE:
                 try:
                     await db.update_user(chat_id, user)
@@ -736,7 +756,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         text="✅ Your selection has been saved. You will be notified if **any** Amul Protein product is available ❗."
                     )
                 except Exception as e:
-                    logger.error("Database error for chat_id %s: %s", common.mask(chat_id), str(e))
+                    logger.error("Database error for chat_id %s: %s", chat_id, str(e))
                     try:
                         await context.bot.edit_message_text(
                             chat_id=chat_id,
@@ -750,7 +770,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             text="⚠️ Failed to save your selection. Please try again later."
                         )
                     except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ Failed to save your selection. Please try again later."
@@ -783,7 +803,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             text="⚠️ Failed to save your selection. Please try again later."
                         )
                     except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ Failed to save your selection. Please try again later."
@@ -791,7 +811,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
-            logger.info("Confirm Any took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+            logger.info("Confirm Any took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
             return ConversationHandler.END  # End conversation after confirmation
 
         elif action == "products_confirm":
@@ -812,7 +832,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         text=f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
                     )
                 except TelegramError as e:
-                    logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                    logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
@@ -820,7 +840,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                     del context.user_data[key]
                 context.user_data["selected_products"] = set()
-                logger.info("Confirm (no selection) took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+                logger.info("Confirm (no selection) took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
                 return ConversationHandler.END  # End conversation after no selection
 
             final_selection = ["Any"] if "Any" in selected_products else list(selected_products)
@@ -830,9 +850,9 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p))
             if not product_message:
                 product_message = "No valid product names available."
-                logger.warning("Empty product message for chat_id %s, final_selection: %s", common.mask(chat_id), final_selection)
+                logger.warning("Empty product message for chat_id %s, final_selection: %s", chat_id, final_selection)
             
-            logger.debug("Confirm selection for chat_id %s, final_selection: %s", common.mask(chat_id), final_selection)
+            logger.debug("Confirm selection for chat_id %s, final_selection: %s", chat_id, final_selection)
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
@@ -841,7 +861,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 await asyncio.sleep(0.5)
             except TelegramError as e:
-                logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
             if config.USE_DATABASE:
                 try:
                     await db.update_user(chat_id, user)
@@ -851,7 +871,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         text=f"✅ Your selections have been saved. You will be notified for:\n{product_message}"
                     )
                 except Exception as e:
-                    logger.error("Database error for chat_id %s: %s", common.mask(chat_id), str(e))
+                    logger.error("Database error for chat_id %s: %s", chat_id, str(e))
                     try:
                         await context.bot.edit_message_text(
                             chat_id=chat_id,
@@ -865,7 +885,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             text="⚠️ Failed to save your selections. Please try again later."
                         )
                     except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ Failed to save your selections. Please try again later."
@@ -898,7 +918,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             text="⚠️ Failed to save your selections. Please try again later."
                         )
                     except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ Failed to save your selections. Please try again later."
@@ -906,7 +926,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
-            logger.info("Confirm selection took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+            logger.info("Confirm selection took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
             return ConversationHandler.END  # End conversation after confirmation
 
         elif action == "products_clear_and_back_to_main":
@@ -918,7 +938,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 await asyncio.sleep(0.5)
             except TelegramError as e:
-                logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+                logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
             selected_products.clear()
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
@@ -973,11 +993,11 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text=text, reply_markup=reply_markup)
-        logger.info("Menu rendering took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+        logger.info("Menu rendering took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
         return AWAITING_PRODUCT_SELECTION
 
     except Exception as e:
-        logger.error("Error in set_products_callback for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.error("Error in set_products_callback for chat_id %s: %s", chat_id, str(e))
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -991,7 +1011,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 text="⚠️ An error occurred. Please try again or use /setproducts to restart."
             )
         except TelegramError as e:
-            logger.debug("Failed to edit message for chat_id %s: %s", common.mask(chat_id), str(e))
+            logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="⚠️ An error occurred. Please try again or use /setproducts to restart."
@@ -999,13 +1019,13 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         for key in [key for key in context.user_data if key.startswith("product_menu_")]:
             del context.user_data[key]
         context.user_data["selected_products"] = set()
-        logger.info("Error handling took %.2f seconds for chat_id %s", time.time() - start_time, common.mask(chat_id))
+        logger.info("Error handling took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
         return ConversationHandler.END  # End conversation on error
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /stop command with animation effect."""
     chat_id = update.effective_chat.id
-    logger.info("Handling /stop command for chat_id %s", common.mask(chat_id))
+    logger.info("Handling /stop command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     message = await update.message.reply_text("⏳ Stopping notifications...")
@@ -1013,7 +1033,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except TelegramError as e:
-        logger.debug("Failed to delete transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
     if config.USE_DATABASE:
         user = await db.get_user(chat_id)
@@ -1053,7 +1073,7 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         await asyncio.sleep(0.5)
     except TelegramError as e:
-        logger.debug("Failed to edit transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+        logger.debug("Failed to edit transitional message for chat_id %s: %s", chat_id, str(e))
 
     user = None
     users_data = None
@@ -1182,9 +1202,9 @@ async def send_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
                text=message,
                parse_mode="MarkdownV2"
            )
-           logger.info("Broadcast sent to chat_id %s", common.mask(chat_id))
+           logger.info("Broadcast sent to chat_id %s", chat_id)
        except Exception as e:
-           logger.error("Failed to send broadcast to chat_id %s: %s", common.mask(chat_id), str(e))
+           logger.error("Failed to send broadcast to chat_id %s: %s", chat_id, str(e))
 
 async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
        query = update.callback_query
@@ -1203,7 +1223,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
            )
            await asyncio.sleep(0.5)
        except TelegramError as e:
-           logger.debug("Failed to edit transitional message for chat_id %s: %s", common.mask(chat_id), str(e))
+           logger.debug("Failed to edit transitional message for chat_id %s: %s", chat_id, str(e))
 
        if query.data == 'broadcast_accept':
            message = context.user_data.get('broadcast_message')
@@ -1255,13 +1275,13 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                sent_count += 1
 
            await query.edit_message_text(f"✅ Broadcast queued for {sent_count} {target_group} users 📢. It will be sent in the background.")
-           logger.info("Admin %s queued broadcast to %d %s users.", common.mask(chat_id), sent_count, target_group)
+           logger.info("Admin %s queued broadcast to %d %s users.", chat_id, sent_count, target_group)
            context.user_data.pop('broadcast_message', None)
            context.user_data.pop('broadcast_target', None)
 
        elif query.data == 'broadcast_reject':
            await query.edit_message_text("❌ Broadcast canceled.")
-           logger.info("Admin %s canceled broadcast.", common.mask(chat_id))
+           logger.info("Admin %s canceled broadcast.", chat_id)
            context.user_data.pop("broadcast_message", None)
            context.user_data.pop("broadcast_target", None)
 

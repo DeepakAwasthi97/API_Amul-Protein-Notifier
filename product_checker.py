@@ -37,18 +37,18 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
                 data = results[result_idx] if result_idx < len(results) else None
                 result_idx += 1
                 if isinstance(data, Exception):
-                    logger.error(f"Error for alias '{alias}' (pincode: {mask(pincode)}): {str(data)}")
+                    logger.error(f"Error for alias '{alias}' (pincode: {pincode}): {str(data)}")
                     continue  # Skip failed products
                 if data is None:
                     # Session likely expired, refresh session and retry
-                    logger.warning(f"Session expired for alias '{alias}' (pincode: {mask(pincode)}). Refreshing session...")
+                    logger.warning(f"Session expired for alias '{alias}' (pincode: {pincode}). Refreshing session...")
                     sync_session = cloudscraper.create_scraper()
                     try:
                         tid, substore, substore_id, cookies = get_tid_and_substore(sync_session, pincode)
                         session.cookie_jar.update_cookies(cookies)
                         data = await fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, cookies=cookies)
                     except Exception as e:
-                        logger.error(f"Retry failed for alias '{alias}' (pincode: {mask(pincode)}): {str(e)}")
+                        logger.error(f"Retry failed for alias '{alias}' (pincode: {pincode}): {str(e)}")
                         continue  # Skip failed products
                 if data:
                     item = data[0]
@@ -56,11 +56,11 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
                     availability = "In Stock" if in_stock else "Sold Out"
                     product_status.append((product_name, availability))
                 else:
-                    logger.warning(f"No data returned for alias '{alias}' (pincode: {mask(pincode)})")
+                    logger.warning(f"No data returned for alias '{alias}' (pincode: {pincode})")
                     continue  # Skip products with no data
             return product_status, substore_id, substore
     except Exception as e:
-        logger.error(f"API-only error for pincode {mask(pincode)}: {str(e)}")
+        logger.error(f"API-only error for pincode {pincode}: {str(e)}")
         return [], None, None
 
 async def check_product_availability_async(pincode):
@@ -81,22 +81,22 @@ async def check_product_availability_async(pincode):
             if substore_id and ',' in substore_id:
                 substore_id = substore_id.split(',')[0].strip()
             if substore_id and substore_id in substore_cache:
-                logger.info(f"[CACHE] Using substore cache for substore_id: {substore_id} (pincode: {mask(pincode)})")
+                logger.info(f"[CACHE] Using substore cache for substore_id: {substore_id} (pincode: {pincode})")
                 return substore_cache[substore_id]
             elif pincode in pincode_cache:
-                logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)} (fallback)")
+                logger.info(f"[CACHE] Using pincode cache for pincode: {pincode} (fallback)")
                 return pincode_cache[pincode]
         else:
             if pincode in pincode_cache:
-                logger.info(f"[CACHE] Using pincode cache for pincode: {mask(pincode)}")
+                logger.info(f"[CACHE] Using pincode cache for pincode: {pincode}")
                 return pincode_cache[pincode]
         
         product_status, substore_id, substore = await get_products_availability_api_only_async(pincode)
         if not product_status or not substore_id:
-            logger.error(f"Skipping product processing for pincode {mask(pincode)} due to session failure.")
+            logger.error(f"Skipping product processing for pincode {pincode} due to session failure.")
             return []
         
-        logger.info(f"Processed {len(product_status)} products for substore {substore_id} (pincode {mask(pincode)})")
+        logger.info(f"Processed {len(product_status)} products for substore {substore_id} (pincode {pincode})")
         
         if USE_SUBSTORE_CACHE and substore_id:
             substore_cache[substore_id] = product_status
@@ -147,7 +147,7 @@ async def check_product_availability_async(pincode):
             pincode_cache[pincode] = product_status
             return product_status
     except Exception as e:
-        logger.error(f"Error checking products for pincode {mask(pincode)}: {str(e)}")
+        logger.error(f"Error checking products for pincode {pincode}: {str(e)}")
         return []
 
 async def check_products_for_users():
@@ -305,14 +305,14 @@ async def check_products_for_users():
                             logger.error(f"Error checking or notifying for group {key}: {str(e)}")
 
                 if failed_checks:
-                    logger.warning(f"Groups failed in attempt {attempt}: {[mask(str(k)) for k in sorted(failed_checks)]}")
+                    logger.warning(f"Groups failed in attempt {attempt}: {[str(k) for k in sorted(failed_checks)]}")
                 attempt += 1
             
             for k, att in passed_on_attempt.items():
                 if att is not None and att > 1:
-                    logger.info(f"Group {mask(str(k))} failed in earlier attempts but passed in attempt {att}")
+                    logger.info(f"Group {str(k)} failed in earlier attempts but passed in attempt {att}")
             if failed_checks:
-                logger.error(f"The following groups failed completely after {MAX_ATTEMPTS} retries: {[mask(str(k)) for k in sorted(failed_checks)]}")
+                logger.error(f"The following groups failed completely after {MAX_ATTEMPTS} retries: {[str(k) for k in sorted(failed_checks)]}")
             logger.info(f"Final cache size: {len(pincode_cache)} pincodes, {len(substore_cache)} substores cached")
         
         except Exception as e:
