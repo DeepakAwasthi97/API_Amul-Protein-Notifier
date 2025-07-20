@@ -23,69 +23,114 @@ import logging
 # Local imports
 import common
 import config
-if config.USE_DATABASE:
-    from database import Database
+from database import Database
 
 logger = common.setup_logging()
-logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
+logger.setLevel(logging.DEBUG)
 
-# Initialize db as None; it will be set in run_polling if USE_DATABASE is True
+# Initialize database
 db = None
 
 # Conversation states
 AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_ADMIN_REPLY = range(4)
 
-async def update_users_file(users_data, context: ContextTypes.DEFAULT_TYPE):
-    """Update the users.json file in the GitHub repository asynchronously."""
-    max_retries = 3
-    async with aiohttp.ClientSession() as session:
-        for attempt in range(max_retries):
-            try:
-                sha = await common.get_file_sha(config.USERS_FILE)
-                if not sha:
-                    logger.error("Failed to get SHA for %s on attempt %d", config.USERS_FILE, attempt + 1)
-                    continue
+# Simple escape_markdown function (from prev_main.py)
+def escape_markdown(text):
+    """Escape special characters for MarkdownV2."""
+    special_chars = r'_*[]()~`>#+-=|{}.!-'
+    return ''.join(f'\\{c}' if c in special_chars else c for c in text)
 
-                url = f"https://api.github.com/repos/{config.PRIVATE_REPO}/contents/{config.USERS_FILE}"
-                headers = {
-                    "Authorization": f"token {config.GH_PAT}",
-                    "Accept": "application/vnd.github+json",
-                }
-                content = base64.b64encode(json.dumps(users_data, indent=2).encode()).decode()
-                data = {
-                    "message": "Update users.json with new user data",
-                    "content": content,
-                    "sha": sha,
-                    "branch": config.GITHUB_BRANCH,
-                }
+async def notification_preference(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /notification_preference command."""
+    chat_id = update.effective_chat.id
+    logger.info("Handling /notification_preference command for chat_id %s", chat_id)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-                async with session.put(url, headers=headers, json=data) as response:
-                    if response.status == 200:
-                        logger.info("Successfully updated %s", config.USERS_FILE)
-                        return True
-                    logger.error(
-                        "Failed to update %s on attempt %d: Status %d, Response: %s",
-                        config.USERS_FILE,
-                        attempt + 1,
-                        response.status,
-                        await response.text(),
-                    )
-            except Exception as e:
-                logger.error("Error updating %s on attempt %d: %s", config.USERS_FILE, attempt + 1, str(e))
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2)
+    user = await db.get_user(chat_id)
+    if not user:
+        await update.message.reply_text("*⚠️ You need to register first*. Use /start to begin.", parse_mode="Markdown")
+        return
 
-        # Notify admin if all retries fail
-        try:
-            async with session.post(
-                f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": config.ADMIN_CHAT_ID, "text": f"Failed to update {config.USERS_FILE} after {max_retries} attempts."}
-            ) as response:
-                if response.status != 200:
-                    logger.error("Failed to notify admin: Status %d, Response: %s", response.status, await response.text())
-        except Exception as e:
-            logger.error("Error notifying admin of update failure: %s", str(e))
-        return False
+    current_preference = user.get("notification_preference", "until_stop")
+
+    keyboard = [
+        [InlineKeyboardButton("🔔 Notify once and stop", callback_data="notif_pref_once_and_stop")],
+        [InlineKeyboardButton("🔄 Notify once per restock", callback_data="notif_pref_once_per_restock")],
+        [InlineKeyboardButton("♾️ Notify until /stop", callback_data="notif_pref_until_stop")],
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    preference_names = {
+        "once_and_stop": "🔔 Notify once and stop",
+        "once_per_restock": "🔄 Notify once per restock", 
+        "until_stop": "♾️ Notify until /stop"
+    }
+
+    current_name = preference_names.get(current_preference, "Unknown")
+
+    message_text = (
+        "🔔 *Notification Preferences*\n\n"
+        f"*Current setting*: {current_name}\n\n"
+        "*Available Options:*\n\n"
+        "🔔 *Notify once and stop* - Get notified once when product is available, then stop notifications for that product\n\n"
+        "🔄 *Notify once per restock* - Get notified once each time the product goes from out-of-stock to in-stock\n\n"
+        "♾️ *Notify until /stop* - Keep getting notifications while the product is available\n\n"
+        "*Choose your preference*:"
+    )
+
+    await update.message.reply_text(
+        message_text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def notification_preference_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle notification preference selection."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+
+    preference_map = {
+        "notif_pref_once_and_stop": "once_and_stop",
+        "notif_pref_once_per_restock": "once_per_restock",
+        "notif_pref_until_stop": "until_stop"
+    }
+
+    new_preference = preference_map.get(query.data)
+    if not new_preference:
+        await query.edit_message_text("⚠️ Invalid preference selected.")
+        return
+
+    user = await db.get_user(chat_id)
+    if not user:
+        await query.edit_message_text("⚠️ User not found. Please use /start to register.")
+        return
+
+    try:
+        # Reset last_notified when changing preference
+        if user.get("notification_preference") != new_preference:
+            user["last_notified"] = {}
+        
+        user["notification_preference"] = new_preference
+        await db.update_user(chat_id, user)
+        await db.commit()
+
+        preference_names = {
+            "once_and_stop": "🔔 Notify once and stop",
+            "once_per_restock": "🔄 Notify once per restock",
+            "until_stop": "♾️ Notify until /stop"
+        }
+
+        selected_name = preference_names[new_preference]
+        message_text = f"✅ Notification preference updated to: \n{selected_name}"
+        await query.edit_message_text(message_text)
+        logger.info(f"Updated notification preference for chat_id {chat_id} to {new_preference}")
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating notification preference for chat_id {chat_id}: {str(e)}")
+        await query.edit_message_text("⚠️ Failed to update notification preference. Please try again.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
@@ -93,78 +138,67 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Handling /start command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    user = None
-    users_data = None
-    if config.USE_DATABASE:
-        user = await db.get_user(chat_id)
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        context.bot_data["users_data"] = users_data
-        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+    user = await db.get_user(chat_id)
 
     if user and user.get("pincode"):
         pincode = user.get("pincode")
         if user.get("active"):
             products = user.get("products", ["Any"])
             product_message = "All of the available Amul Protein products 🧀" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
-            await update.message.reply_text(
-                f"🎉 You have already enabled notifications for PINCODE {pincode} 📍.\n"
-                f"You are currently tracking:\n{product_message}"
+
+            message_text = (
+                f"🎉 *You have already enabled notifications* for PINCODE *{pincode}* 📍.\n\n"
+                f"*You are currently tracking the following items*:\n{product_message}"
             )
         else:
             user["active"] = True
-            if config.USE_DATABASE:
-                await db.update_user(chat_id, user)
-            else:
-                user_in_data = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-                if user_in_data:
-                    user_in_data.update(user)
-                if not await update_users_file(users_data, context):
-                    await update.message.reply_text("⚠️ Failed to re-enable notifications. Please try again.")
-                    return
-                context.bot_data["users_data"] = users_data
+            await db.update_user(chat_id, user)
+            await db.commit()
+
             message = await update.message.reply_text("⏳ Re-enabling notifications...")
             await asyncio.sleep(0.5)
+
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except TelegramError as e:
                 logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
-            await update.message.reply_text(
+
+            message_text = (
                 f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
                 "Use /stop to pause them again."
             )
     else:
-        await update.message.reply_text(
+        message_text = (
             "👋 Welcome to the Amul Protein Items Notifier Bot! 🧀\n\n"
             "Use /setpincode PINCODE to set your pincode 📍 (Mandatory).\n"
             "Use /setproducts to select products 🧀 (Optional, defaults to any Amul protein product).\n"
+            "Use /notification_preference to change how you are notified about product availability 🔔."
             "Use /support to report issues or support the project 📞."
         )
 
+    await update.message.reply_text(message_text, parse_mode="Markdown")
+
 async def _save_pincode(chat_id: int, pincode: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Helper function to save the pincode for a user, handling both DB and JSON file."""
-    if config.USE_DATABASE:
+    """Helper function to save the pincode for a user using database only."""
+    try:
         user = await db.get_user(chat_id)
         if user:
             user["pincode"] = pincode
             user["active"] = True
+            user["last_notified"] = {}
             await db.update_user(chat_id, user)
         else:
-            new_user = {"chat_id": str(chat_id), "pincode": pincode, "products": ["Any"], "active": True}
+            new_user = {"chat_id": str(chat_id), 
+                        "pincode": pincode, 
+                        "products": ["Any"], 
+                        "active": True,
+                        "last_notified" : {}}
             await db.add_user(chat_id, new_user)
+        await db.commit()
         return True
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        users = users_data["users"]
-        user = next((u for u in users if u["chat_id"] == str(chat_id)), None)
-        if user:
-            user["pincode"] = pincode
-            user["active"] = True
-        else:
-            users.append({"chat_id": str(chat_id), "pincode": pincode, "products": ["Any"], "active": True})
-        if await update_users_file(users_data, context):
-            context.bot_data["users_data"] = users_data
-            return True
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error saving pincode for chat_id {chat_id}: {str(e)}")
         return False
 
 async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -181,6 +215,7 @@ async def set_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
         message = await update.message.reply_text("⏳ Setting PINCODE...")
         await asyncio.sleep(0.5)
+
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
         except TelegramError as e:
@@ -199,6 +234,7 @@ async def pincode_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handles the pincode received from the user during a conversation."""
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     pincode = update.message.text
 
     if not pincode.isdigit() or len(pincode) != 6:
@@ -209,7 +245,7 @@ async def pincode_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(f"✅ Thank you! Your PINCODE has been set to {pincode} 📍.")
     else:
         await update.message.reply_text("⚠️ Failed to set your PINCODE. Please try again.")
-    
+
     return ConversationHandler.END
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -222,9 +258,10 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
         [InlineKeyboardButton("Support Project 🌟", callback_data="support_project")]
     ]
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("📞 How can we assist you today?", reply_markup=reply_markup)
-    return AWAITING_PRODUCT_SELECTION  # Enter state for callback handling
+    return AWAITING_PRODUCT_SELECTION
 
 async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the support menu callback actions."""
@@ -235,8 +272,9 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     action = query.data
+
     if action == "support_contact":
-        # Check rate limit (1 message every 1 minutes)
+        # Check rate limit (1 message every 1 minute)
         last_support_time = context.user_data.get("last_support_time")
         if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
             await query.edit_message_text("⏳ Please wait a few minutes before sending another support message.")
@@ -244,34 +282,42 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         await query.edit_message_text("📞 We're listening! Please send your feedback or issue. Use /cancel to stop.")
         return AWAITING_SUPPORT_MESSAGE
+
     elif action == "support_project":
         keyboard = [
             [InlineKeyboardButton("Give ⭐ on GitHub", callback_data="support_github")],
             [InlineKeyboardButton("Tip (chai/coffee) 😊", callback_data="support_tip")],
             [InlineKeyboardButton("⬅️ Go Back", callback_data="support_back")]
         ]
+
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🌟 Support the project:\n- Give a star on GitHub.\n- Tip with chai or coffee!", reply_markup=reply_markup)
         return AWAITING_PRODUCT_SELECTION
+
     elif action == "support_github":
         keyboard = [
             [InlineKeyboardButton("⬅️ Go Back", callback_data="support_back")]
         ]
+
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("⭐ Thank you for supporting! Please visit https://github.com/DeepakAwasthi97/API_Amul-Protein-Notifier to give a star manually.", reply_markup=reply_markup)
         return AWAITING_PRODUCT_SELECTION
+
     elif action == "support_tip":
         keyboard = [
             [InlineKeyboardButton("⬅️ Go Back", callback_data="support_back")]
         ]
+
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("😊 Thank you for the tip! Please support via https://buymeachai.ankushminda.com/Deepak_Awasthi (ensure your page is set up).", reply_markup=reply_markup)
+        await query.edit_message_text("😊 Thank you for the tip! Please support via https://razorpay.me/@amulproteinnotifierbot", reply_markup=reply_markup)
         return AWAITING_PRODUCT_SELECTION
+
     elif action == "support_back":
         keyboard = [
             [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
             [InlineKeyboardButton("Support Project 🌟", callback_data="support_project")]
         ]
+
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("📞 How can we assist you today?", reply_markup=reply_markup)
         return AWAITING_PRODUCT_SELECTION
@@ -280,9 +326,10 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     """Handles the support message received from the user during a conversation."""
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     message = update.message.text
 
-    # Check rate limit (aligned to 1 minutes for consistency)
+    # Check rate limit (aligned to 1 minute for consistency)
     last_support_time = context.user_data.get("last_support_time")
     if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
         await update.message.reply_text("⏳ Please wait a few minutes before sending another support message.")
@@ -291,6 +338,7 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     if len(message) < 5:
         await update.message.reply_text("⚠️ Your message is too short. If this was a mistake, use /cancel to stop.")
         return AWAITING_SUPPORT_MESSAGE
+
     if len(message) > 500:
         await update.message.reply_text("⚠️ Your message is too long. Please keep it under 500 characters, or use /cancel to stop.")
         return AWAITING_SUPPORT_MESSAGE
@@ -302,13 +350,8 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     if "support_requests" not in context.bot_data:
         context.bot_data["support_requests"] = {}
 
-    # Get user data
-    user = None
-    if config.USE_DATABASE:
-        user = await db.get_user(chat_id)
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+    # Get user data from database
+    user = await db.get_user(chat_id)
 
     # Prepare user info for admin
     user_info = f"Chat ID: {chat_id}\n"
@@ -318,10 +361,6 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     user_info += f"Tracked Products:\n{product_message}"
 
     # Escape the user's message and user_info
-    def escape_markdown(text):
-        special_chars = r'_*[]()~`>#+-=|{}.!-'
-        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
-
     escaped_user_info = escape_markdown(user_info)
     escaped_user_message = escape_markdown(message)
 
@@ -344,16 +383,17 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Reply", callback_data=f"reply_{request_id}")]])
         )
+
         context.user_data["last_support_time"] = datetime.now()
         await update.message.reply_text("✅ Thank you for your feedback! 📞 We've sent it to our team.")
     except Exception as e:
         logger.error(f"Failed to send support message for chat_id {chat_id}: {str(e)}")
         await update.message.reply_text("⚠️ Failed to send your message. Please try again later.")
-    
+
     return ConversationHandler.END
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the /reply <chat_id> <message> command for the admin to send a message to any user."""
+    """Handles the /reply command for the admin to send a message to any user."""
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
@@ -388,6 +428,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(message) < 5:
         await update.message.reply_text("⚠️ Your message is too short. Please provide at least 5 characters.")
         return
+
     if len(message) > 4096:
         await update.message.reply_text("⚠️ Your message is too long. Please keep it under 4096 characters.")
         return
@@ -395,16 +436,13 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Animation effect
     transitional_message = await update.message.reply_text("⏳ Sending reply...")
     await asyncio.sleep(0.5)
+
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=transitional_message.message_id)
     except TelegramError as e:
         logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
     # Escape special characters for MarkdownV2
-    def escape_markdown(text):
-        special_chars = r'_*[]()~`>#+-=|{}.!-'
-        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
-
     escaped_message = escape_markdown(message)
 
     # Send reply to user with MarkdownV2 formatting, preserving newlines
@@ -414,6 +452,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text=f"📩 *Response from Admin*:\n\n{escaped_message}",
             parse_mode="MarkdownV2"
         )
+
         await update.message.reply_text(f"✅ Reply sent to user {target_chat_id}.")
     except TelegramError as e:
         logger.error("Failed to send reply to chat_id %s: %s", target_chat_id, str(e))
@@ -442,21 +481,23 @@ async def reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
 
     user_chat_id = support_request["chat_id"]
+
     # Always start a new reply session
     if "reply_sessions" not in context.user_data:
         context.user_data["reply_sessions"] = {}
+
     context.user_data["reply_sessions"][request_id] = {
         "chat_id": user_chat_id,
         "timestamp": datetime.now()
     }
-    
+
     # Send a new message for the reply prompt with the specific request ID
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"📝 Enter your reply to send to chat_id {user_chat_id} (Request ID: {request_id}). Use /cancel to stop.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data=f"cancel_reply_{request_id}")]])
     )
-    
+
     return AWAITING_ADMIN_REPLY
 
 async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -493,7 +534,6 @@ async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     support_request = context.bot_data["support_requests"].get(request_id)
-
     if not support_request:
         await update.message.reply_text("⚠️ Support request not found. Please start over.")
         context.user_data.pop("reply_sessions", None)
@@ -502,10 +542,6 @@ async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYP
     user_chat_id = support_request["chat_id"]
 
     # Escape special characters for MarkdownV2
-    def escape_markdown(text):
-        special_chars = r'_*[]()~`>#+-=|{}.!-'
-        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
-
     escaped_message = escape_markdown(message)
 
     try:
@@ -514,12 +550,15 @@ async def admin_reply_received(update: Update, context: ContextTypes.DEFAULT_TYP
             text=f"📩 *Response from Admin*:\n\n{escaped_message}",
             parse_mode="MarkdownV2"
         )
+
         await update.message.reply_text(f"✅ Reply sent to chat_id {user_chat_id} (Request ID: {request_id}).")
         logger.info(f"Admin {chat_id} sent reply to chat_id {user_chat_id} for request {request_id}")
+
         del context.bot_data["support_requests"][request_id]
         context.user_data["reply_sessions"].pop(request_id, None)
         if not context.user_data["reply_sessions"]:
             context.user_data.pop("reply_sessions", None)
+
     except Exception as e:
         logger.error(f"Failed to send reply to chat_id {user_chat_id} for request {request_id}: {str(e)}")
         await update.message.reply_text("⚠️ Failed to send reply. Please try again.")
@@ -532,21 +571,25 @@ async def cancel_reply_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     chat_id = query.from_user.id
     request_id = query.data.replace("cancel_reply_", "")
+
     await query.edit_message_text(f"❌ Reply action canceled for Request ID: {request_id}.")
+
     # Clear the specific reply session
     if "reply_sessions" in context.user_data and request_id in context.user_data["reply_sessions"]:
         context.user_data["reply_sessions"].pop(request_id, None)
-    if not context.user_data.get("reply_sessions"):
-        context.user_data.pop("reply_sessions", None)
+        if not context.user_data.get("reply_sessions"):
+            context.user_data.pop("reply_sessions", None)
+
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation with an animation effect."""
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    
+
     message = await update.message.reply_text("❌ Cancelling...")
     await asyncio.sleep(0.5)
+
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except TelegramError as e:
@@ -555,6 +598,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Clear product selection and reply state
     for key in ["selected_products", "product_menu_view", "product_menu_category", "cached_user", "reply_sessions"]:
         context.user_data.pop(key, None)
+
     await update.message.reply_text("❌ Action cancelled.")
     return ConversationHandler.END
 
@@ -562,11 +606,14 @@ async def cleanup_support_requests(context: ContextTypes.DEFAULT_TYPE):
     """Periodically clean up support requests older than 24 hours."""
     if "support_requests" not in context.bot_data:
         return
+
     cutoff = datetime.now() - timedelta(hours=24)
     support_requests = context.bot_data["support_requests"]
     expired = [req_id for req_id, req in support_requests.items() if req["timestamp"] < cutoff]
+
     for req_id in expired:
         support_requests.pop(req_id, None)
+
     logger.debug("Cleaned up %d expired support requests", len(expired))
 
 async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -574,18 +621,14 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     chat_id = update.effective_chat.id
     logger.info("Starting product selection for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     start_time = time.time()
 
     # Clear previous product selection state
     for key in ["selected_products", "product_menu_view", "product_menu_category", "cached_user"]:
         context.user_data.pop(key, None)
 
-    if config.USE_DATABASE:
-        user = await db.get_user(chat_id)
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        context.bot_data["users_data"] = users_data
-        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+    user = await db.get_user(chat_id)
 
     context.user_data["selected_products"] = set()
     context.user_data["product_menu_view"] = "main"
@@ -596,10 +639,13 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         [InlineKeyboardButton("List All Products 📋", callback_data="products_nav_all")],
         [InlineKeyboardButton("Track Any Available Product ❗", callback_data="products_confirm_Any")],
     ]
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "🧀 Please select the products you want to monitor.", reply_markup=reply_markup
+        "🧀 Please select the products you want to monitor.", 
+        reply_markup=reply_markup
     )
+
     logger.info("set_products took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
     return AWAITING_PRODUCT_SELECTION
 
@@ -609,11 +655,13 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     chat_id = query.from_user.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     start_time = time.time()
 
     # Ensure selected_products is initialized
     if "selected_products" not in context.user_data:
         context.user_data["selected_products"] = set()
+
     selected_products = context.user_data["selected_products"]
     logger.debug("Selected products for chat_id %s: %s", chat_id, selected_products)
 
@@ -624,17 +672,21 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if action == "products_nav_main" and selected_products:
             display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in selected_products if p in common.PRODUCTS]
             product_list_text = "\n".join(f"- {p}" for p in display_products if p)
+
             if not product_list_text:
                 product_list_text = "No valid products selected."
                 logger.warning("No valid products in display_products for chat_id %s: %s", chat_id, display_products)
+
             confirmation_text = (
                 "🧀 Please confirm your selection of products for notifications:\n\n" +
                 f"{product_list_text}"
             )
+
             confirmation_keyboard = [
                 [InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm")],
                 [InlineKeyboardButton("❌ Clear Selection & Back to Main Menu", callback_data="products_clear_and_back_to_main")],
             ]
+
             reply_markup = InlineKeyboardMarkup(confirmation_keyboard)
             await query.edit_message_text(text=confirmation_text, reply_markup=reply_markup)
             logger.info("Confirmation menu rendered in %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
@@ -645,65 +697,38 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 product_index = int(action.replace("products_toggle_", ""))
                 if product_index < 0 or product_index >= len(common.PRODUCTS):
                     logger.error("Invalid product_index %d for chat_id %s", product_index, chat_id)
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Processing error..."
-                        )
-                        await asyncio.sleep(0.5)
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
-                        )
-                    except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
-                        )
+                    await query.edit_message_text("⚠️ Invalid product selection. Please try again or use /setproducts to restart.")
                     return AWAITING_PRODUCT_SELECTION
+
                 product_name = common.PRODUCTS[product_index]
                 if product_name in selected_products:
                     selected_products.remove(product_name)
                 else:
                     selected_products.add(product_name)
+
                 logger.debug("Toggled product %s for chat_id %s, new selected_products: %s", product_name, chat_id, selected_products)
+
             except ValueError:
                 logger.error("Invalid product_toggle action for chat_id %s: %s", chat_id, action)
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text="⚠️ Processing error..."
-                    )
-                    await asyncio.sleep(0.5)
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
-                    )
-                except TelegramError as e:
-                    logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="⚠️ Invalid product selection. Please try again or use /setproducts to restart."
-                    )
+                await query.edit_message_text("⚠️ Invalid product selection. Please try again or use /setproducts to restart.")
                 return AWAITING_PRODUCT_SELECTION
+
             action_for_rendering = f"products_view_cat_{context.user_data.get('product_menu_category', '')}" if context.user_data.get("product_menu_view") == "category" else "products_nav_all"
 
         elif action == "products_clear":
             current_category = context.user_data.get("product_menu_category")
+
             if not selected_products:
                 text = "🧀 No products selected to clear."
                 keyboard = []
+
                 if current_category:
                     text += f"\n\nProducts in {current_category}:"
                     for product_name in common.CATEGORIZED_PRODUCTS[current_category]:
                         product_index = common.PRODUCTS.index(product_name)
-                        selected_marker = "✅ " if product_name in selected_products else ""
+                        selected_marker = "☑️ " if product_name in selected_products else ""
                         keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{product_index}")])
+
                     keyboard.append([
                         InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm"),
                         InlineKeyboardButton("❌ Clear Selection", callback_data="products_clear"),
@@ -713,22 +738,26 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     text += "\n\nSelect products to monitor:"
                     for i, product_name in enumerate(common.PRODUCTS):
                         if product_name == "Any": continue
-                        selected_marker = "✅ " if product_name in selected_products else ""
+                        selected_marker = "☑️ " if product_name in selected_products else ""
                         keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{i}")])
+
                     keyboard.append([
                         InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm"),
                         InlineKeyboardButton("❌ Clear Selection", callback_data="products_clear"),
                     ])
                     keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="products_nav_main")])
+
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(text=text, reply_markup=reply_markup)
                 logger.info("Clear selection (no products) took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
                 return AWAITING_PRODUCT_SELECTION
+
             if current_category:
                 products_to_clear = set(common.CATEGORIZED_PRODUCTS[current_category])
                 selected_products -= products_to_clear
             else:
                 selected_products.clear()
+
             logger.debug("Cleared products for chat_id %s, new selected_products: %s", chat_id, selected_products)
             action_for_rendering = f"products_view_cat_{current_category}" if current_category else "products_nav_all"
 
@@ -737,80 +766,28 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             user = context.user_data.get("cached_user", {})
             user["products"] = final_selection
             user["active"] = True
+
             logger.debug("Confirm Any for chat_id %s, final_selection: %s", chat_id, final_selection)
+
             try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=query.message.message_id,
-                    text="✅ Saving your selection..."
-                )
+                await query.edit_message_text("✅ Saving your selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
                 logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-            if config.USE_DATABASE:
-                try:
-                    await db.update_user(chat_id, user)
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text="✅ Your selection has been saved. You will be notified if **any** Amul Protein product is available ❗."
-                    )
-                except Exception as e:
-                    logger.error("Database error for chat_id %s: %s", chat_id, str(e))
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Processing error..."
-                        )
-                        await asyncio.sleep(0.5)
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Failed to save your selection. Please try again later."
-                        )
-                    except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ Failed to save your selection. Please try again later."
-                        )
-            else:
-                users_data = context.bot_data.get("users_data", common.read_users_file())
-                user_in_data = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-                if user_in_data:
-                    user_in_data.update(user)
-                else:
-                    users_data["users"].append(user)
-                if await update_users_file(users_data, context):
-                    context.bot_data["users_data"] = users_data
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text="✅ Your selection has been saved. You will be notified if **any** Amul Protein product is available ❗."
-                    )
-                else:
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Processing error..."
-                        )
-                        await asyncio.sleep(0.5)
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Failed to save your selection. Please try again later."
-                        )
-                    except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ Failed to save your selection. Please try again later."
-                        )
+
+            try:
+                await db.update_user(chat_id, user)
+                await db.commit()
+                await query.edit_message_text("✅ Your selection has been saved. \nYou will be notified if any of the Amul Protein product is available❗.")
+            except Exception as e:
+                await db.rollback()
+                logger.error("Database error for chat_id %s: %s", chat_id, str(e))
+                await query.edit_message_text("⚠️ Failed to save your selection. Please try again later.")
+
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
+
             logger.info("Confirm Any took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
             return ConversationHandler.END  # End conversation after confirmation
 
@@ -819,27 +796,13 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 user = context.user_data.get("cached_user", {})
                 current_tracked_products = user.get("products", ["Any"])
                 product_message = "All of the available Amul Protein products 🧀" if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in current_tracked_products)
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text="⚠️ Processing..."
-                    )
-                    await asyncio.sleep(0.5)
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text=f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
-                    )
-                except TelegramError as e:
-                    logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
-                    )
+
+                await query.edit_message_text(f"⚠️ No products were selected. You are currently tracking:\n{product_message}")
+
                 for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                     del context.user_data[key]
                 context.user_data["selected_products"] = set()
+
                 logger.info("Confirm (no selection) took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
                 return ConversationHandler.END  # End conversation after no selection
 
@@ -847,98 +810,44 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             user = context.user_data.get("cached_user", {})
             user["products"] = final_selection
             user["active"] = True
+
             product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p))
+
             if not product_message:
                 product_message = "No valid product names available."
                 logger.warning("Empty product message for chat_id %s, final_selection: %s", chat_id, final_selection)
-            
+
             logger.debug("Confirm selection for chat_id %s, final_selection: %s", chat_id, final_selection)
+
             try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=query.message.message_id,
-                    text="✅ Saving your selection..."
-                )
+                await query.edit_message_text("✅ Saving your selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
                 logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-            if config.USE_DATABASE:
-                try:
-                    await db.update_user(chat_id, user)
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text=f"✅ Your selections have been saved. You will be notified for:\n{product_message}"
-                    )
-                except Exception as e:
-                    logger.error("Database error for chat_id %s: %s", chat_id, str(e))
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Processing error..."
-                        )
-                        await asyncio.sleep(0.5)
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Failed to save your selections. Please try again later."
-                        )
-                    except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ Failed to save your selections. Please try again later."
-                        )
-            else:
-                users_data = context.bot_data.get("users_data", common.read_users_file())
-                user_in_data = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-                if user_in_data:
-                    user_in_data.update(user)
-                else:
-                    users_data["users"].append(user)
-                if await update_users_file(users_data, context):
-                    context.bot_data["users_data"] = users_data
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=query.message.message_id,
-                        text=f"✅ Your selections have been saved. You will be notified for:\n{product_message}"
-                    )
-                else:
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Processing error..."
-                        )
-                        await asyncio.sleep(0.5)
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=query.message.message_id,
-                            text="⚠️ Failed to save your selections. Please try again later."
-                        )
-                    except TelegramError as e:
-                        logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ Failed to save your selections. Please try again later."
-                        )
+
+            try:
+                await db.update_user(chat_id, user)
+                await db.commit()
+                await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
+            except Exception as e:
+                await db.rollback()
+                logger.error("Database error for chat_id %s: %s", chat_id, str(e))
+                await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
+
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
+
             logger.info("Confirm selection took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
             return ConversationHandler.END  # End conversation after confirmation
 
         elif action == "products_clear_and_back_to_main":
             try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=query.message.message_id,
-                    text="❌ Clearing selection..."
-                )
+                await query.edit_message_text("❌ Clearing selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
                 logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
+
             selected_products.clear()
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
@@ -948,6 +857,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Menu rendering
         keyboard = []
         text = ""
+
         if action_for_rendering == "products_nav_main":
             context.user_data["product_menu_view"] = "main"
             text = "🧀 Please select the products you want to monitor."
@@ -956,26 +866,31 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 [InlineKeyboardButton("List All Products 📋", callback_data="products_nav_all")],
                 [InlineKeyboardButton("Track Any Available Product ❗", callback_data="products_confirm_Any")],
             ])
+
         elif action_for_rendering == "products_nav_cat_list":
             context.user_data["product_menu_view"] = "cat_list"
             text = "🧀 Select a category to view products:"
             for category in common.CATEGORIES:
                 keyboard.append([InlineKeyboardButton(category, callback_data=f"products_view_cat_{category}")])
+
         elif action_for_rendering.startswith("products_view_cat_"):
             category = action_for_rendering.replace("products_view_cat_", "")
             context.user_data["product_menu_view"] = "category"
             context.user_data["product_menu_category"] = category
             text = f"🧀 Products in {category}:"
+
             for product_name in common.CATEGORIZED_PRODUCTS[category]:
                 product_index = common.PRODUCTS.index(product_name)
-                selected_marker = "✅ " if product_name in selected_products else ""
+                selected_marker = "☑️ " if product_name in selected_products else ""
                 keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{product_index}")])
+
         elif action_for_rendering == "products_nav_all":
             context.user_data["product_menu_view"] = "all"
             text = "🧀 Select products to monitor:"
+
             for i, product_name in enumerate(common.PRODUCTS):
                 if product_name == "Any": continue
-                selected_marker = "✅ " if product_name in selected_products else ""
+                selected_marker = "☑️ " if product_name in selected_products else ""
                 keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{i}")])
 
         if action_for_rendering not in ["products_nav_main", "products_nav_cat_list"]:
@@ -993,143 +908,143 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text=text, reply_markup=reply_markup)
+
         logger.info("Menu rendering took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
         return AWAITING_PRODUCT_SELECTION
 
     except Exception as e:
         logger.error("Error in set_products_callback for chat_id %s: %s", chat_id, str(e))
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=query.message.message_id,
-                text="⚠️ Processing error..."
-            )
-            await asyncio.sleep(0.5)
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=query.message.message_id,
-                text="⚠️ An error occurred. Please try again or use /setproducts to restart."
-            )
-        except TelegramError as e:
-            logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ An error occurred. Please try again or use /setproducts to restart."
-            )
+        await query.edit_message_text("⚠️ An error occurred. Please try again or use /setproducts to restart.")
+
         for key in [key for key in context.user_data if key.startswith("product_menu_")]:
             del context.user_data[key]
         context.user_data["selected_products"] = set()
+
         logger.info("Error handling took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
         return ConversationHandler.END  # End conversation on error
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for the /stop command with animation effect."""
+    """Deactivates notifications for the user."""
     chat_id = update.effective_chat.id
     logger.info("Handling /stop command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    message = await update.message.reply_text("⏳ Stopping notifications...")
-    await asyncio.sleep(0.5)
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-    except TelegramError as e:
-        logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
+    user = await db.get_user(chat_id)
+    if user:
+        if user.get("active"):
+            try:
+                user["active"] = False
+                await db.update_user(chat_id, user)
+                await db.commit()
 
-    if config.USE_DATABASE:
-        user = await db.get_user(chat_id)
-        if not user or not user.get("active", False):
-            await update.message.reply_text("⚠️ You are not subscribed to notifications.")
-            return
-        user["active"] = False
-        await db.update_user(chat_id, user)
+                keyboard = [[InlineKeyboardButton("🔄 Re-activate", callback_data="reactivate")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text("❌ Notifications have been disabled. \nUse /start or click Re-activate button to enable again.", reply_markup=reply_markup)
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"Error deactivating notifications for chat_id {chat_id}: {str(e)}")
+                await update.message.reply_text("⚠️ Failed to deactivate notifications. Please try again.")
+        else:
+            await update.message.reply_text("ℹ️ Notifications are already disabled. Use /start to enable them.")
     else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-        if not user or not user.get("active", False):
-            await update.message.reply_text("⚠️ You are not subscribed to notifications.")
-            return
-        user["active"] = False
-        if not await update_users_file(users_data, context):
-            await update.message.reply_text("⚠️ Failed to stop notifications. Please try again.")
-            return
-        context.bot_data["users_data"] = users_data
-
-    keyboard = [[InlineKeyboardButton("🔄 Re-enable Notifications", callback_data="reactivate")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("⏸️ Notifications stopped.", reply_markup=reply_markup)
+        await update.message.reply_text("ℹ️ You are not registered. Use /start to begin.")
 
 async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback handler for the 'Re-enable Notifications' button with animation effect."""
+    """Handles the reactivation callback."""
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
+
+    user = await db.get_user(chat_id)
+    if user:
+        try:
+            user["active"] = True
+            await db.update_user(chat_id, user)
+            await db.commit()
+            await query.edit_message_text("✅ Notifications have been re-enabled! 🔔")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error reactivating notifications for chat_id {chat_id}: {str(e)}")
+            await query.edit_message_text("⚠️ Failed to reactivate notifications. Please try again.")
+    else:
+        await query.edit_message_text("⚠️ User not found. Please use /start to register.")
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the current status and settings for the user."""
+    chat_id = update.effective_chat.id
+    logger.info("Handling /status command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=query.message.message_id,
-            text="⏳ Re-enabling notifications..."
-        )
-        await asyncio.sleep(0.5)
-    except TelegramError as e:
-        logger.debug("Failed to edit transitional message for chat_id %s: %s", chat_id, str(e))
+    user = await db.get_user(chat_id)
+    if user:
+        pincode = user.get("pincode", "Not set")
+        products = user.get("products", ["Any"])
+        active = user.get("active", False)
+        notification_preference = user.get("notification_preference", "until_stop")
 
-    user = None
-    users_data = None
-    if config.USE_DATABASE:
-        user = await db.get_user(chat_id)
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        user = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
+        preference_names = {
+            "once_and_stop": "🔔 Notify once and stop",
+            "once_per_restock": "🔄 Notify once per restock",
+            "until_stop": "♾️ Notify until /stop"
+        }
 
-    if user and user.get("pincode"):
-        if not user.get("active"):
-            user["active"] = True
-            if config.USE_DATABASE:
-                await db.update_user(chat_id, user)
-            else:
-                user_in_data = next((u for u in users_data["users"] if u["chat_id"] == str(chat_id)), None)
-                if user_in_data:
-                    user_in_data.update(user)
-                if not await update_users_file(users_data, context):
-                    await query.edit_message_text("⚠️ Failed to re-enable notifications. Please try again.")
-                    return
-                context.bot_data["users_data"] = users_data
-        
-        await query.edit_message_text(f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {user['pincode']} 📍.\nUse /stop to pause them again.")
+        preference_name = preference_names.get(notification_preference, "Unknown")
+
+        status_text = f"📊 *Your Current Settings*:\n\n"
+        status_text += f"📍 *Pincode*: {pincode}\n\n"
+        status_text += f"🔔 *Notifications*: {'✅ Enabled' if active else '❌ Disabled'}\n"
+        status_text += f"⚙️ *Notification Preference*: {preference_name}\n\n"
+        status_text += f"🧀 *Tracked Products*:\n"
+
+        if len(products) == 1 and products[0].lower() == "any":
+            status_text += "- All available Amul Protein products 🧀"
+        else:
+            for product in products:
+                status_text += f"- {common.PRODUCT_NAME_MAP.get(product, product)}\n"
+
+        await update.message.reply_text(status_text, parse_mode="Markdown")
     else:
-        await query.edit_message_text("⚠️ Could not find your registration. Please use /start to set up notifications.")
+        await update.message.reply_text("ℹ️ You are not registered. Use /start to begin.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Broadcasts a message to all users or specific groups (Admin only)."""
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if str(chat_id) != config.ADMIN_CHAT_ID:
+        logger.warning("Unauthorized broadcast attempt by chat_id %s", chat_id)
         await update.message.reply_text("⚠️ You are not authorized to use this command.")
         return
 
     # Get the full message text
     full_text = update.message.text
     if not full_text or len(full_text) <= len("/broadcast"):
-        await update.message.reply_text("⚠️ Usage: /broadcast <message> or /broadcast <ALL|active|inactive> <message>")
+        await update.message.reply_text("⚠️ Usage: /broadcast [all|active|inactive] <message>")
         return
 
-    # Parse the target group and message
-    parts = full_text[len("/broadcast"):].strip().split(maxsplit=1)
+    # FIXED: Parse target group and message with maxsplit=1
+    after_broadcast = full_text[len("/broadcast"):].strip()
+    parts = after_broadcast.split(maxsplit=1)  # Only split once to separate target from message
+    
     target_group = "active"  # Default target group
-    message_to_broadcast = full_text[len("/broadcast"):].strip()
+    message_to_broadcast = ""
 
-    if len(parts) > 1:
+    if len(parts) >= 2:
         potential_target = parts[0].lower().strip()
         if potential_target in ["all", "active", "inactive"]:
             target_group = potential_target
-            message_to_broadcast = parts[1].strip()
+            message_to_broadcast = parts[1].strip()  # Everything after the target
         else:
-            message_to_broadcast = full_text[len("/broadcast"):].strip()
-    elif len(parts) == 1 and parts[0].lower().strip() in ["all", "active", "inactive"]:
-        target_group = parts[0].lower().strip()
-        message_to_broadcast = ""  # User needs to provide a message
+            # If first word is not a valid target, treat entire text as message
+            message_to_broadcast = after_broadcast.strip()
+    elif len(parts) == 1:
+        # Check if the single part is a target or message
+        single_part = parts[0].lower().strip()
+        if single_part in ["all", "active", "inactive"]:
+            target_group = single_part
+            message_to_broadcast = ""  # No message provided
+        else:
+            message_to_broadcast = parts[0].strip()
 
     if not message_to_broadcast:
         await update.message.reply_text("⚠️ Please provide a message to broadcast.")
@@ -1139,173 +1054,209 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Message too long. Please keep it under 4096 characters.")
         return
 
-    # Determine target users based on parameter
-    if config.USE_DATABASE:
-        all_users = await db.get_all_users()
-        if not all_users or not isinstance(all_users, list):
-            logger.error("get_all_users returned invalid data: %s", all_users)
-            await update.message.reply_text("⚠️ Error fetching users from database.")
-            return
-        for user in all_users:
-            if not all(k in user for k in ['chat_id', 'active', 'pincode', 'products']):
-                logger.warning("User data missing expected keys: %s", user)
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        all_users = users_data.get("users", [])
-        if not all_users or not isinstance(all_users, list):
-            logger.error("users.json data invalid: %s", all_users)
-            await update.message.reply_text("⚠️ Error fetching users from JSON.")
-            return
+    # Animation effect
+    transitional_message = await update.message.reply_text("⏳ Preparing broadcast...")
+    await asyncio.sleep(0.5)
 
-    target_users = []
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=transitional_message.message_id)
+    except TelegramError as e:
+        logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
+
+    # Get users from database
+    all_users = await db.get_all_users()
+
+    # Filter users based on target group
     if target_group == "all":
         target_users = all_users
     elif target_group == "active":
-        target_users = [user for user in all_users if user.get('active', False)]
+        target_users = [user for user in all_users if user.get("active", False)]
     elif target_group == "inactive":
-        target_users = [user for user in all_users if not user.get('active', False)]
+        target_users = [user for user in all_users if not user.get("active", False)]
+    else:
+        target_users = []
 
     if not target_users:
-        await update.message.reply_text("⚠️ No users found for the selected target group.")
+        await update.message.reply_text(f"⚠️ No {target_group} users found to broadcast to.")
         return
 
-    context.user_data['broadcast_message'] = message_to_broadcast
-    context.user_data['broadcast_target'] = target_group
-
-    # Escape the broadcast message
-    def escape_markdown(text):
-        special_chars = r'_*[]()~`>#+-=|{}.!-'
-        return ''.join(f'\\{c}' if c in special_chars else c for c in text)
-
-    base_text = f"📢 You are about to send the following message to {target_group} users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm."
-    escaped_full_text = escape_markdown(base_text)
-
+    # Show confirmation menu
     keyboard = [
         [InlineKeyboardButton("✅ Accept", callback_data='broadcast_accept')],
         [InlineKeyboardButton("❌ Reject", callback_data='broadcast_reject')],
     ]
+
     reply_markup = InlineKeyboardMarkup(keyboard)
+    context.user_data['broadcast_message'] = message_to_broadcast
+    context.user_data['broadcast_target'] = target_group
+    context.user_data['broadcast_target_users'] = target_users  # Store users for callback
+
+    # Use the same approach as prev_main.py - escape the full message for display
+    base_text = f"📢 You are about to send the following message to {target_group} users:\n\n---\n{message_to_broadcast}\n---\n\nPlease confirm."
+    escaped_full_text = escape_markdown(base_text)
+
     await update.message.reply_text(
         escaped_full_text,
         parse_mode="MarkdownV2",
         reply_markup=reply_markup
     )
 
-async def send_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
-       job_data = context.job.data
-       chat_id = job_data["chat_id"]
-       message = job_data["message"]
-
-       try:
-           await context.bot.send_message(
-               chat_id=chat_id,
-               text=message,
-               parse_mode="MarkdownV2"
-           )
-           logger.info("Broadcast sent to chat_id %s", chat_id)
-       except Exception as e:
-           logger.error("Failed to send broadcast to chat_id %s: %s", chat_id, str(e))
-
 async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-       query = update.callback_query
-       await query.answer()
-       chat_id = query.from_user.id
-       await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-       
-       if str(chat_id) != config.ADMIN_CHAT_ID:
-           return
+    """Handles broadcast confirmation callbacks."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-       try:
-           await context.bot.edit_message_text(
-               chat_id=chat_id,
-               message_id=query.message.message_id,
-               text="⏳ Processing broadcast..."
-           )
-           await asyncio.sleep(0.5)
-       except TelegramError as e:
-           logger.debug("Failed to edit transitional message for chat_id %s: %s", chat_id, str(e))
+    if str(chat_id) != config.ADMIN_CHAT_ID:
+        return
 
-       if query.data == 'broadcast_accept':
-           message = context.user_data.get('broadcast_message')
-           target_group = context.user_data.get('broadcast_target')
-           if not message:
-               await query.edit_message_text("⚠️ Error: Broadcast message not found. Please try again.")
-               return
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=query.message.message_id,
+            text="⏳ Processing broadcast..."
+        )
+        await asyncio.sleep(0.5)
+    except TelegramError as e:
+        logger.debug("Failed to edit transitional message for chat_id %s: %s", chat_id, str(e))
 
-           # Escape the broadcast message
-           special_chars = r'_*[]()~`>#+-=|{}.!-'
-           escaped_message = ''.join(f'\\{c}' if c in special_chars else c for c in message)
+    if query.data == 'broadcast_accept':
+        message = context.user_data.get('broadcast_message')
+        target_group = context.user_data.get('broadcast_target')
+        target_users = context.user_data.get('broadcast_target_users')  # Retrieve stored users
 
-           if config.USE_DATABASE:
-               all_users = await db.get_all_users()
-               if not all_users or not isinstance(all_users, list):
-                   logger.error("get_all_users returned invalid data: %s", all_users)
-                   await query.edit_message_text("⚠️ Error fetching users from database.")
-                   return
-               for user in all_users:
-                   if not all(k in user for k in ['chat_id', 'active', 'pincode', 'products']):
-                       logger.warning("User data missing expected keys: %s", user)
-           else:
-               users_data = context.bot_data.get("users_data", common.read_users_file())
-               all_users = users_data.get("users", [])
-               if not all_users or not isinstance(all_users, list):
-                   logger.error("users.json data invalid: %s", all_users)
-                   await query.edit_message_text("⚠️ Error fetching users from JSON.")
-                   return
+        if not message or not target_users:
+            await query.edit_message_text("⚠️ Error: Broadcast data not found. Please try again.")
+            return
 
-           target_users = []
-           if target_group == "all":
-               target_users = all_users
-           elif target_group == "active":
-               target_users = [user for user in all_users if user.get('active', False)]
-           elif target_group == "inactive":
-               target_users = [user for user in all_users if not user.get('active', False)]
+        # Escape the broadcast message using the same approach as prev_main.py
+        escaped_message = escape_markdown(message)
 
-           sent_count = 0
-           delay = 0.1  # Delay between sends to respect Telegram API limits
+        sent_count = 0
+        delay = 0.1  # Delay between sends to respect Telegram API limits
+        
+        # NEW: Record start time here
+        start_time = time.time()
+        admin_chat_id = chat_id
+        
+        for user in target_users:
+            try:
+                user_chat_id = int(user['chat_id'])
+                context.job_queue.run_once(
+                    send_broadcast_job,
+                    when=delay * sent_count,
+                    # FIXED: Pass only the escaped message (no prefix here)
+                    data={"chat_id": user_chat_id, "message": escaped_message}
+                )
+                sent_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to queue broadcast for user {user.get('chat_id')}: {str(e)}")
+        
+        # NEW: Queue completion job with a buffer after the last broadcast
+        completion_delay = delay * (sent_count + 1)  # Buffer to ensure all jobs finish
+        context.job_queue.run_once(
+            send_broadcast_completion,
+            when=completion_delay,
+            data={
+                "start_time": start_time,
+                "admin_chat_id": admin_chat_id,
+                "sent_count": sent_count,
+                "target_group": target_group
+            }
+        )
 
-           for user in target_users:
-               # Ensure chat_id is an integer, handling potential string or integer input
-               chat_id_value = int(user['chat_id']) if isinstance(user['chat_id'], (str, int)) else user['chat_id']
-               context.job_queue.run_once(
-                   send_broadcast_job,
-                   when=delay * sent_count,
-                   data={"chat_id": chat_id_value, "message": escaped_message}
-               )
-               sent_count += 1
+        await query.edit_message_text(f"✅ Broadcast queued for {sent_count} {target_group} users 📢. It will be sent in the background.")
+        logger.info("Admin %s queued broadcast to %d %s users.", chat_id, sent_count, target_group)
 
-           await query.edit_message_text(f"✅ Broadcast queued for {sent_count} {target_group} users 📢. It will be sent in the background.")
-           logger.info("Admin %s queued broadcast to %d %s users.", chat_id, sent_count, target_group)
-           context.user_data.pop('broadcast_message', None)
-           context.user_data.pop('broadcast_target', None)
+        # Clear broadcast data
+        context.user_data.pop('broadcast_message', None)
+        context.user_data.pop('broadcast_target', None)
+        context.user_data.pop('broadcast_target_users', None)
 
-       elif query.data == 'broadcast_reject':
-           await query.edit_message_text("❌ Broadcast canceled.")
-           logger.info("Admin %s canceled broadcast.", chat_id)
-           context.user_data.pop("broadcast_message", None)
-           context.user_data.pop("broadcast_target", None)
+    elif query.data == 'broadcast_reject':
+        await query.edit_message_text("❌ Broadcast canceled.")
+        logger.info("Admin %s canceled broadcast.", chat_id)
+        # Clear broadcast data
+        context.user_data.pop("broadcast_message", None)
+        context.user_data.pop("broadcast_target", None)
+        context.user_data.pop("broadcast_target_users", None)
+
+async def send_broadcast_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job queue function to send a single broadcast message asynchronously."""
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
+    message = job_data["message"]
+    try:
+        # FIXED: Add the prefix only here (once) to avoid duplication
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📢 *Broadcast Message*:\n\n{message}",
+            parse_mode="MarkdownV2"
+        )
+        logger.info("Broadcast sent to chat_id %s", chat_id)
+    except Exception as e:
+        logger.error("Failed to send broadcast to chat_id %s: %s", chat_id, str(e))
+
+async def send_broadcast_completion(context: ContextTypes.DEFAULT_TYPE):
+    """Job queue function to send a completion message after all broadcasts."""
+    job_data = context.job.data
+    end_time = time.time()
+    start_time = job_data["start_time"]
+    duration = end_time - start_time
+    admin_chat_id = job_data["admin_chat_id"]
+    sent_count = job_data["sent_count"]
+    target_group = job_data["target_group"]
+    
+    # Construct the raw message
+    raw_message = f"✅ Broadcast completed successfully! It took {duration:.2f} seconds for {sent_count} {target_group} users."
+    
+    # Escape for MarkdownV2 to fix the '!' issue
+    escaped_message = escape_markdown(raw_message)
+    
+    try:
+        await context.bot.send_message(
+            chat_id=admin_chat_id,
+            text=escaped_message,
+            parse_mode="MarkdownV2"
+        )
+        logger.info("Broadcast completion message sent to admin %s", admin_chat_id)
+    except Exception as e:
+        logger.error("Failed to send broadcast completion message to admin %s: %s", admin_chat_id, str(e))
 
 async def bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows bot statistics (Admin only)."""
     chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     if str(chat_id) != config.ADMIN_CHAT_ID:
+        logger.warning("Unauthorized bot_stats attempt by chat_id %s", chat_id)
         await update.message.reply_text("⚠️ You are not authorized to use this command.")
         return
-    
-    # Fetch user data
-    if config.USE_DATABASE:
-        all_users = await db.get_all_users()
-    else:
-        users_data = context.bot_data.get("users_data", common.read_users_file())
-        all_users = users_data.get("users", [])
-    
-    # Total Users and Active Users
+
+    # Get all users from database
+    all_users = await db.get_all_users()
+
+    if not all_users:
+        await update.message.reply_text("📊 *No users* found in the database.", parse_mode="Markdown")
+        return
+
+    # Calculate statistics (union from both files)
     total_users = len(all_users)
-    total_active_users = sum(1 for user in all_users if user.get('active', False))
-    
-    # Total Distinct Pincodes
-    distinct_pincodes = len(set(user.get('pincode') for user in all_users if user.get('pincode')))
-    
-    # Top 3 States (using substore_list.py)
+    active_users = sum(1 for user in all_users if user.get("active", False))
+    inactive_users = total_users - active_users
+
+    # Notification Preferences (from main.py)
+    pref_counts = {"until_stop": 0, "once_and_stop": 0, "once_per_restock": 0}
+    for user in all_users:
+        pref = user.get("notification_preference", "until_stop")
+        if pref in pref_counts:
+            pref_counts[pref] += 1
+
+    # Total Unique Pincodes (from prev_main.py)
+    distinct_pincodes = len(set(user.get("pincode") for user in all_users if user.get("pincode")))
+
+    # Top 3 States (from prev_main.py, using substore_info)
     pincode_to_state = {}
     for state_data in substore_info:
         state = state_data["name"]
@@ -1313,74 +1264,98 @@ async def bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pincodes = state_data["pincodes"].split(",")
             for pincode in pincodes:
                 pincode_to_state[pincode.strip()] = state
-    
-    user_states = [pincode_to_state.get(user.get("pincode", "").strip(), "Unknown") 
-                   for user in all_users]
+
+    user_states = [pincode_to_state.get(user.get("pincode", "").strip(), "Unknown") for user in all_users]
     known_user_states = [state for state in user_states if state != "Unknown"]
     state_counts = Counter(known_user_states)
     top_states = state_counts.most_common(3)
-    
-    # Top 3 Tracked Products (excluding "Any")
-    product_counts = Counter()
+
+    # Top 5 Products (from main.py, including "Any")
+    product_counter = Counter()
     for user in all_users:
-        products = user.get('products', [])
+        products = user.get("products", ["Any"])
+        for product in products:
+            product_counter[product] += 1
+    top_products_all = product_counter.most_common(5)
+
+    # Top 3 Specific Tracked Products (from prev_main.py, excluding "Any")
+    specific_product_counts = Counter()
+    for user in all_users:
+        products = user.get("products", [])
         if products != ["Any"]:
-            product_counts.update(products)
-    top_products = product_counts.most_common(3)
-    
-    # Users Not Tracking Specific Products
-    users_not_tracking_specific = [
-        user['chat_id'] for user in all_users if user.get('products') == ["Any"] or not user.get('products')
-    ]
-    
-    # Additional Stats
+            specific_product_counts.update(products)
+    top_specific_products = specific_product_counts.most_common(3)
+
+    # Users Not Tracking Specific Products (from prev_main.py)
+    users_not_tracking_specific = len([user for user in all_users if user.get("products") == ["Any"] or not user.get("products")])
+
+    # Total Support Requests (from prev_main.py, uncommented)
     total_support_requests = len(context.bot_data.get("support_requests", {}))
-    pincode_distribution = Counter(user.get('pincode') for user in all_users if user.get('pincode'))
-    
-    # Format the stats message with bold stat names
+
+    # Pincode Distribution (Top 5, from both)
+    pincode_counter = Counter()
+    for user in all_users:
+        pincode = user.get("pincode")
+        if pincode:
+            pincode_counter[pincode] += 1
+
+    # Build statistics message with improved readability
     stats_message = (
-        f"📊 *Bot Statistics* 📊\n\n"
+        "📊 *Bot Statistics*\n\n"
+        "*User Overview*:\n"
         f"👥 *Total Users*: {total_users}\n"
-        f"✅ *Total Active Users*: {total_active_users}\n"
-        f"🏙️ *Total Unqiue Pincodes*: {distinct_pincodes}\n\n"
-        f"🏳️ *Top 3 States*:\n"
+        f"✅ *Active Users*: {active_users}\n"
+        f"❌ *Inactive Users*: {inactive_users}\n\n"
+        "*Notification Preferences*:\n"
+        f"♾️ *Until Stop*: {pref_counts['until_stop']}\n"
+        f"🔔 *Once and Stop*: {pref_counts['once_and_stop']}\n"
+        f"🔄 *Once per Restock*: {pref_counts['once_per_restock']}\n\n"
+        f"🏙️ *Total Unique Pincodes*: {distinct_pincodes}\n\n"
+        "*Top 3 States*:\n"
     )
-    
+
     for state, count in top_states:
-        stats_message += f"  - {state}: {count} users\n"
-    
-    stats_message += f"\n🔝 *Top 3 Tracked Products*:\n"
-    if top_products:
-        # stats_message += f"  Most Tracked products:\n"
-        for product, count in top_products:
-            stats_message += f"  - {count} users are tracking {common.PRODUCT_NAME_MAP.get(product, product)} \n"
+        stats_message += f"- {state}: {count} users\n"
+
+    stats_message += "\n*Top 5 Products (Including 'Any')*:\n"
+    for product, count in top_products_all:
+        product_name = common.PRODUCT_NAME_MAP.get(product, product)
+        stats_message += f"- {product_name}: {count} users\n"
+
+    stats_message += "\n*Top 3 Specific Tracked Products (Excluding 'Any')*:\n"
+    if top_specific_products:
+        for product, count in top_specific_products:
+            product_name = common.PRODUCT_NAME_MAP.get(product, product)
+            stats_message += f"- {product_name}: {count} users\n"
     else:
-        stats_message += "  No specific products are currently tracked.\n"
-    
+        stats_message += "- No specific products are currently tracked.\n"
+
     stats_message += (
-        f"\n📦 *Users Not Tracking Specific Products*: {len(users_not_tracking_specific)}\n"
-        # f"📞 *Total Support Requests*: {total_support_requests}\n"
-        f"\n🏙️ *Pincode Distribution (Top 5)*:\n"
+        f"\n📦 *Users Not Tracking Specific Products*: {users_not_tracking_specific}\n"
+        f"📞 *Total Support Requests*: {total_support_requests}\n\n"
+        "*Top 5 Pincodes*:\n"
     )
-    
-    for pincode, count in pincode_distribution.most_common(5):
-        stats_message += f"  - {pincode}: {count} users\n"
-    
-    await update.message.reply_text(stats_message, parse_mode='Markdown')
+
+    for pincode, count in pincode_counter.most_common(5):
+        stats_message += f"- 📍 {pincode}: {count} users\n"
+
+    await update.message.reply_text(stats_message, parse_mode="Markdown")
+
 
 async def run_polling(app: Application):
     """Starts the bot in polling mode."""
     global db
-    if config.USE_DATABASE:
-        db = Database(config.DATABASE_FILE)
-        await db._init_db()
-    
+    db = Database(config.DATABASE_FILE)
+    await db._init_db()
+
     await app.initialize()
     await app.start()
     await app.updater.start_polling(timeout=5)
     logger.info("Polling started")
+
     # Schedule periodic cleanup of support requests
     app.job_queue.run_repeating(cleanup_support_requests, interval=3600)  # Run every hour
+
     try:
         await asyncio.Event().wait()
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -1390,13 +1365,14 @@ async def run_polling(app: Application):
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
-        if config.USE_DATABASE and db:
+        if db:
             await db.close()
         logger.info("Bot shutdown complete")
 
 def main():
     """Main entry point for the bot."""
     logger.info("Starting main function")
+
     if common.is_already_running("main.py"):
         logger.error("Another instance of the bot is already running. Exiting...")
         raise SystemExit(1)
@@ -1423,11 +1399,14 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
             CommandHandler("support", support),
-            CommandHandler("setproducts", set_products)  # Allow /support to restart the conversation
+            CommandHandler("setproducts", set_products)  # Allow restarting conversations
         ],
+        per_message=False,  # Suppresses PTB warnings
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("notification_preference", notification_preference))
+    app.add_handler(CallbackQueryHandler(notification_preference_callback, pattern="^notif_pref_"))
     app.add_handler(CommandHandler("reply", reply))  # Add direct /reply command
     app.add_handler(CallbackQueryHandler(cancel_reply_callback, pattern='^cancel_reply_'))
     app.add_handler(conv_handler)
@@ -1436,6 +1415,7 @@ def main():
     app.add_handler(CallbackQueryHandler(broadcast_callback, pattern='^broadcast_'))
     app.add_handler(CommandHandler("broadcast", broadcast))  # Add broadcast command handler
     app.add_handler(CommandHandler("bot_stats", bot_stats))
+    app.add_handler(CommandHandler("my_settings", status))
 
     asyncio.run(run_polling(app))
 

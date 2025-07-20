@@ -1,43 +1,102 @@
-
+import asyncio
+import aiosqlite
+import json
 import logging
-from database import Database
-import common
-import config
+import os
+from github import github
+from github.GithubException import GithubException
+from datetime import datetime
+from dotenv import load_dotenv
 
-def sync_database_to_github():
-    """
-    Fetches all user data from the SQLite database and updates the users.json
-    file in the GitHub repository.
-    """
-    logging.info("Starting database to GitHub sync...")
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-    if not config.USE_DATABASE:
-        logging.warning("USE_DATABASE is set to False. Sync script will not run.")
+async def fetch_users_from_db(db_file):
+    """Fetch all users from the database."""
+    try:
+        async with aiosqlite.connect(db_file) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute("SELECT data FROM users") as cursor:
+                rows = await cursor.fetchall()
+                users = [json.loads(row["data"]) for row in rows]
+                logger.info(f"Fetched {len(users)} users from database")
+                return users
+    except aiosqlite.Error as e:
+        logger.error(f"Error fetching users from database: {e}")
+        raise
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding user data: {e}")
+        raise
+
+def push_to_github(users, github_token, repo_name, file_path):
+    """Push users.json to GitHub repository."""
+    try:
+        g = Github(github_token)
+        repo = g.get_repo(repo_name)
+        commit_message = f"Update users.json {datetime.now().isoformat()}"
+        json_content = json.dumps(users, indent=2)
+
+        # Check if file exists in repo
+        try:
+            contents = repo.get_contents(file_path)
+            repo.update_file(file_path, commit_message, json_content, contents.sha)
+            logger.info(f"Updated {file_path} in GitHub repository {repo_name}")
+        except GithubException as e:
+            if e.status == 404:
+                # File doesn't exist, create it
+                repo.create_file(file_path, commit_message, json_content)
+                logger.info(f"Created {file_path} in GitHub repository {repo_name}")
+            else:
+                raise
+    except GithubException as e:
+        logger.error(f"GitHub API error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error pushing to GitHub: {e}")
+        raise
+
+async def main():
+    """Main function to sync users.db to GitHub."""
+    load_dotenv()
+    db_file = os.getenv("DATABASE_FILE", "users.db")
+    github_token = os.getenv("GITHUB_TOKEN")
+    repo_name = os.getenv("GITHUB_REPO")
+    file_path = os.getenv("GITHUB_JSON_PATH", "users.json")
+
+    if not all([db_file, github_token, repo_name, file_path]):
+        logger.error("Missing environment variables: DATABASE_FILE, GITHUB_TOKEN, GITHUB_REPO, or GITHUB_JSON_PATH")
         return
 
-    # 1. Initialize the database and fetch all users
-    db = Database(config.DATABASE_FILE)
-    all_users = db.get_all_users()
-    db.close()
+    for attempt in range(3):
+        try:
+            # Fetch users from database
+            users = await fetch_users_from_db(db_file)
 
-    if not all_users:
-        logging.info("No users found in the database. Nothing to sync.")
-        return
+            # Write to temporary local file
+            temp_file = "users_temp.json"
+            with open(temp_file, "w") as f:
+                json.dump(users, f, indent=2)
+            logger.info(f"Wrote {len(users)} users to temporary file {temp_file}")
 
-    logging.info(f"Found {len(all_users)} users in the database to sync.")
+            # Push to GitHub
+            push_to_github(users, github_token, repo_name, file_path)
 
-    # 2. Format the data for the JSON file
-    # The users.json file expects a dictionary with a "users" key
-    users_data_for_json = {"users": all_users}
+            # Clean up temporary file
+            os.remove(temp_file)
+            logger.info("Temporary file removed")
+            break
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2)
+            else:
+                logger.error("Sync failed after 3 attempts")
+                raise
 
-    # 3. Update the file in the GitHub repository
-    success = common.update_users_file(users_data_for_json)
-
-    if success:
-        logging.info("Successfully synced database to users.json on GitHub.")
-    else:
-        logging.error("Failed to sync database to users.json on GitHub.")
-
-if __name__ == '__main__':
-    common.setup_logging()
-    sync_database_to_github()
+if __name__ == "__main__":
+    asyncio.run(main())

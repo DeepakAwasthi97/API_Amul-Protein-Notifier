@@ -1,18 +1,7 @@
-import base64
-import json
 import logging
 import os
 import psutil
-import requests
-import aiohttp
-
-from config import (
-    LOG_FILE,
-    USERS_FILE,
-    PRIVATE_REPO,
-    GITHUB_BRANCH,
-    GH_PAT,
-)
+from config import LOG_FILE
 
 # Constants
 PRODUCTS = [
@@ -96,7 +85,7 @@ CATEGORIZED_PRODUCTS = {
         "Amul Chocolate Whey Protein Gift Pack, 34 g | Pack of 10 sachets",
         "Amul Chocolate Whey Protein, 34 g | Pack of 30 sachets",
         "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets",
-    ]
+    ],
 }
 
 CATEGORIES = list(CATEGORIZED_PRODUCTS.keys())
@@ -150,6 +139,7 @@ def is_already_running(script_name):
     logger = logging.getLogger(__name__)
     logger.info("Checking for running instances of %s", script_name)
     current_pid = os.getpid()
+    
     try:
         for proc in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
@@ -167,43 +157,6 @@ def is_already_running(script_name):
     except Exception as e:
         logger.error("Error checking running processes: %s", str(e))
         return False
+    
     logger.info("No other running instances found")
     return False
-
-async def get_file_sha(path):
-    logger = logging.getLogger(__name__)
-    url = f"https://api.github.com/repos/{PRIVATE_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
-    headers = {
-        "Authorization": f"token {GH_PAT}",
-        "Accept": "application/vnd.github+json",
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data["sha"]
-            logger.error(
-                "Could not retrieve SHA for %s: Status %d, Response: %s",
-                path,
-                response.status,
-                await response.text(),
-            )
-            return None
-
-def read_users_file():
-    logger = logging.getLogger(__name__)
-    url = f"https://api.github.com/repos/{PRIVATE_REPO}/contents/{USERS_FILE}?ref={GITHUB_BRANCH}"
-    headers = {
-        "Authorization": f"token {GH_PAT}",
-        "Accept": "application/vnd.github+json",
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        logger.error(
-            "Failed to read users.json: Status %d, Response: %s",
-            response.status_code,
-            response.text,
-        )
-        return {"users": []}
-    content = base64.b64decode(response.json()["content"]).decode()
-    return json.loads(content)

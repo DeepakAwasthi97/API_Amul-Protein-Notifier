@@ -7,19 +7,14 @@ load_dotenv()
 # --- Secrets and Environment-Specific ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-GH_PAT = os.getenv("GH_PAT")
-PRIVATE_REPO = os.getenv("PRIVATE_REPO")
-GITHUB_BRANCH = "main"
 
 # --- Concurrency Settings ---
-SEMAPHORE_LIMIT = 1  # Increased from 3 for better parallelization with APIs
-MAX_RETRY = 1      # Removed retries as APIs are more reliable
+SEMAPHORE_LIMIT = 1         # Limit concurrent product checks to 1
+MAX_RETRY = 1            # Maximum retries for product availability checks
 
 # --- File Paths ---
-LOG_FILE = "product_check.log"
-DATABASE_FILE = "users.db"
-USERS_FILE = "users.json"
-USE_DATABASE = False  # Set to False to use users.json
+LOG_FILE = "product_check.log"  # Default log file
+DATABASE_FILE = "users.db"  # Default database file
 
 # --- API Configuration ---
 BASE_URL = "https://shop.amul.com"
@@ -30,9 +25,9 @@ SETTINGS_URL = f"{BASE_URL}/entity/ms.settings/_/setPreferences"
 INFO_URL = f"{BASE_URL}/user/info.js"
 
 # Session management
-COOKIE_REFRESH_INTERVAL = 1200  # Refresh cookies every 20 minutes
+COOKIE_REFRESH_INTERVAL = 1200
 
-# API Headers - consistent headers for all API requests
+# API Headers
 API_HEADERS = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6",
@@ -51,24 +46,18 @@ API_HEADERS = {
     "content-type": "application/json"
 }
 
-# --- Hybrid Caching and Substore Mapping ---
-# If True, use substore-based cache and mapping in substore_list.py
-USE_SUBSTORE_CACHE = True
-# If True, fallback to pincode-level cache if substore mapping is missing
-FALLBACK_TO_PINCODE_CACHE = True
-# Path to substore mapping file
+# --- Substore Mapping ---
+USE_SUBSTORE_CACHE = True   # If True, will use substore cache if available
+FALLBACK_TO_PINCODE_CACHE = True # If True, will use pincode cache if substore cache is not available
 SUBSTORE_LIST_FILE = "substore_list.py"
 
 # --- Rate Limiting Settings ---
-# Delay range (seconds) between product API calls
-PRODUCT_API_DELAY_RANGE = (1.0, 2.0)  # Increase delay to reduce 429s
-# Global max requests per second (across all products/pincodes)
-GLOBAL_PRODUCT_API_RPS = 5  # Lower this if still rate limited
+PRODUCT_API_DELAY_RANGE = (1.0, 2.0)
+GLOBAL_PRODUCT_API_RPS = 5 # Requests per second
 
 # --- Logging and Monitoring ---
-# Log rotation settings (in bytes and days)
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
-MAX_OF_DAYS = 1  # 3 days
+MAX_OF_DAYS = 1
 
 # --- Execution Mode ---
-EXECUTION_MODE = "Concurrent"  # Can be 'Sequential' or 'Concurrent'
+EXECUTION_MODE = "Concurrent"  # Concurrent or Sequential

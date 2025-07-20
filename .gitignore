@@ -13,5 +13,7 @@ infojs_debug.log
 # Exclude backup and debug files
 BACKUP_check_products.py
 simple_checker.py
+backup-main - Copy.py
+backup-database.py
 # Exclude IDE and editor specific files
 sqlite3.exe
