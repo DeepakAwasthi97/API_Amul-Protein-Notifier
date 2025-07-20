@@ -147,8 +147,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             product_message = "All of the available Amul Protein products 🧀" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
 
             message_text = (
-                f"🎉 *You have already enabled notifications* for PINCODE *{pincode}* 📍.\n\n"
-                f"*You are currently tracking the following items*:\n{product_message}"
+                f"🎉 You have already enabled notifications for PINCODE {pincode} 📍.\n\n"
+                f"You are currently tracking:\n{product_message}"
             )
         else:
             user["active"] = True
@@ -164,7 +164,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
             message_text = (
-                f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
+                f"🎉 Welcome back\! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
                 "Use /stop to pause them again."
             )
     else:
@@ -172,11 +172,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👋 Welcome to the Amul Protein Items Notifier Bot! 🧀\n\n"
             "Use /setpincode PINCODE to set your pincode 📍 (Mandatory).\n"
             "Use /setproducts to select products 🧀 (Optional, defaults to any Amul protein product).\n"
-            "Use /notification_preference to change how you are notified about product availability 🔔."
+            "Use /notification_preference to change how you are notified about product availability 🔔.\n"
             "Use /support to report issues or support the project 📞."
         )
 
-    await update.message.reply_text(message_text, parse_mode="Markdown")
+    # Escape the entire message for MarkdownV2
+    escaped_text = escape_markdown(message_text)
+
+    await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
+
 
 async def _save_pincode(chat_id: int, pincode: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Helper function to save the pincode for a user using database only."""
