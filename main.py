@@ -164,7 +164,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
             message_text = (
-                f"🎉 Welcome back\! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
+                f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
                 "Use /stop to pause them again."
             )
     else:
@@ -943,7 +943,10 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 keyboard = [[InlineKeyboardButton("🔄 Re-activate", callback_data="reactivate")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.message.reply_text("❌ Notifications have been disabled. \nUse /start or click Re-activate button to enable again.", reply_markup=reply_markup)
+
+                message_text = "❌ Notifications have been disabled. Use /start or click Re-activate button to enable again."
+                escaped_text = escape_markdown(message_text)
+                await update.message.reply_text(escaped_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
             except Exception as e:
                 await db.rollback()
                 logger.error(f"Error deactivating notifications for chat_id {chat_id}: {str(e)}")
@@ -965,7 +968,10 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             user["active"] = True
             await db.update_user(chat_id, user)
             await db.commit()
-            await query.edit_message_text("✅ Notifications have been re-enabled! 🔔")
+
+            message_text = "✅ Notifications have been re-enabled! 🔔"
+            escaped_text = escape_markdown(message_text)
+            await query.edit_message_text(escaped_text, parse_mode="MarkdownV2")
         except Exception as e:
             await db.rollback()
             logger.error(f"Error reactivating notifications for chat_id {chat_id}: {str(e)}")
