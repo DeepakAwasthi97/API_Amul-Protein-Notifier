@@ -32,7 +32,7 @@ logger.setLevel(logging.DEBUG)
 db = None
 
 # Conversation states
-AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_ADMIN_REPLY = range(4)
+AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_ADMIN_REPLY, AWAITING_NOTIFICATION_PREFERENCE = range(5)
 
 # Simple escape_markdown function (from prev_main.py)
 def escape_markdown(text):
@@ -48,8 +48,12 @@ async def notification_preference(update: Update, context: ContextTypes.DEFAULT_
 
     user = await db.get_user(chat_id)
     if not user:
-        await update.message.reply_text("*⚠️ You need to register first*. Use /start to begin.", parse_mode="Markdown")
+        await update.message.reply_text("*⚠️ You need to register first*. Use /setpincode to begin.", parse_mode="Markdown")
         return
+
+    # Clear any stale product selection states
+    for key in [k for k in context.user_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
+        context.user_data.pop(key, None)
 
     current_preference = user.get("notification_preference", "until_stop")
 
@@ -173,6 +177,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Use /setpincode PINCODE to set your pincode 📍 (Mandatory).\n"
             "Use /setproducts to select products 🧀 (Optional, defaults to any Amul protein product).\n"
             "Use /notification_preference to change how you are notified about product availability 🔔.\n"
+            "Use /my_settings to view your current pincode and product/notification related config.\n"
             "Use /support to report issues or support the project 📞."
         )
 
@@ -257,6 +262,15 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     logger.info("Handling /support command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    user = await db.get_user(chat_id)
+    if not user:
+        await update.message.reply_text("*⚠️ You need to register first*. Use /setpincode to begin.", parse_mode="Markdown")
+        return
+
+    # Clear stale product selection states
+    for key in [k for k in context.user_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
+        context.user_data.pop(key, None)
 
     keyboard = [
         [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
@@ -469,6 +483,10 @@ async def reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = query.from_user.id
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    # Clear stale product selection states
+    for key in [k for k in context.user_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
+        context.user_data.pop(key, None)
+
     if str(chat_id) != config.ADMIN_CHAT_ID:
         logger.warning(f"Unauthorized reply attempt by chat_id {chat_id}")
         return ConversationHandler.END
@@ -633,6 +651,9 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         context.user_data.pop(key, None)
 
     user = await db.get_user(chat_id)
+    if not user:
+        await update.message.reply_text("*⚠️ You need to register first*. Use /setpincode to begin.", parse_mode="Markdown")
+        return
 
     context.user_data["selected_products"] = set()
     context.user_data["product_menu_view"] = "main"
@@ -655,24 +676,38 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles all interactions for the product selection menu with animation effects."""
+
+    start_time = time.time()
     query = update.callback_query
     await query.answer()
     chat_id = query.from_user.id
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    logger.debug("set_products_callback called with chat_id: %s from update: %s", chat_id, update.effective_chat.id)
 
-    start_time = time.time()
+    # Validate chat_id against the update context
+    if chat_id != update.effective_chat.id:
+        logger.warning("Chat_id mismatch: query=%s, update=%s. Ending conversation.", chat_id, update.effective_chat.id)
+        await query.answer("Session expired. Use /setproducts to restart.")
+        return ConversationHandler.END
 
-    # Ensure selected_products is initialized
-    if "selected_products" not in context.user_data:
-        context.user_data["selected_products"] = set()
-
-    selected_products = context.user_data["selected_products"]
-    logger.debug("Selected products for chat_id %s: %s", chat_id, selected_products)
-
-    action = query.data
-    action_for_rendering = action
+    # Check if user is active
+    user = await db.get_user(chat_id)
+    if not user or not user.get("active", False):
+        logger.warning("Inactive or non-existent user for chat_id %s", chat_id)
+        await query.answer("User inactive or not found. Use /start to reactivate.")
+        return ConversationHandler.END
 
     try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        # Ensure selected_products is initialized
+        if "selected_products" not in context.user_data:
+            context.user_data["selected_products"] = set()
+
+        selected_products = context.user_data["selected_products"]
+        logger.debug("Selected products for chat_id %s: %s", chat_id, selected_products)
+
+        action = query.data
+        action_for_rendering = action
+
         if action == "products_nav_main" and selected_products:
             display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in selected_products if p in common.PRODUCTS]
             product_list_text = "\n".join(f"- {p}" for p in display_products if p)
@@ -954,7 +989,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("ℹ️ Notifications are already disabled. Use /start to enable them.")
     else:
-        await update.message.reply_text("ℹ️ You are not registered. Use /start to begin.")
+        await update.message.reply_text("ℹ️ You are not registered. Use /setpincode to begin.")
 
 async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the reactivation callback."""
@@ -1014,7 +1049,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(status_text, parse_mode="Markdown")
     else:
-        await update.message.reply_text("ℹ️ You are not registered. Use /start to begin.")
+        await update.message.reply_text("ℹ️ You are not registered. Use /setpincode to begin.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcasts a message to all users or specific groups (Admin only)."""
@@ -1358,6 +1393,14 @@ async def run_polling(app: Application):
     db = Database(config.DATABASE_FILE)
     await db._init_db()
 
+    # Clear all user data on startup to prevent stale states
+    for chat_data in app.chat_data.values():
+        for key in [k for k in chat_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
+            chat_data.pop(key, None)
+    for user_data in app.user_data.values():
+        for key in [k for k in user_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
+            user_data.pop(key, None)
+
     await app.initialize()
     await app.start()
     await app.updater.start_polling(timeout=5)
@@ -1405,6 +1448,7 @@ def main():
                 CallbackQueryHandler(set_products_callback, pattern='^products_')
             ],
             AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply_received)],
+            AWAITING_NOTIFICATION_PREFERENCE: [CallbackQueryHandler(notification_preference_callback, pattern='^notif_pref_')],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
