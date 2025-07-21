@@ -3,7 +3,7 @@ import aiosqlite
 import json
 import logging
 import os
-from github import github
+from github import Github
 from github.GithubException import GithubException
 from datetime import datetime
 from dotenv import load_dotenv

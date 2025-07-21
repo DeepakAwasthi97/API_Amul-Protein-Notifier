@@ -15,5 +15,7 @@ BACKUP_check_products.py
 simple_checker.py
 backup-main - Copy.py
 backup-database.py
+users.db-shm
+users.db-wal
 # Exclude IDE and editor specific files
 sqlite3.exe
