@@ -36,6 +36,7 @@ def setup_logging():
         interval=MAX_OF_DAYS,
         encoding='utf-8',
     )
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -44,6 +45,7 @@ def setup_logging():
             handler,
         ],
     )
+
     return logging.getLogger(__name__)
 
 def mask(value, visible=2):
@@ -57,12 +59,21 @@ def is_product_in_stock(product_data, substore_id):
     Robustly determine if a product is in stock:
     - available == 1
     - substore_id is in seller_substore_ids
+    - Now returns a tuple: (in_stock: bool, inventory_quantity: int)
     """
     try:
         available = int(product_data.get("available", 0))
     except Exception:
         available = 0
+
     seller_substore_ids = product_data.get("seller_substore_ids", [])
+
     # Handle comma-separated substore_id
     substore_ids = [id.strip() for id in substore_id.split(',') if id.strip()] if ',' in substore_id else [substore_id]
-    return available == 1 and any(sid in seller_substore_ids for sid in substore_ids)
+
+    in_stock = available == 1 and any(sid in seller_substore_ids for sid in substore_ids)
+
+    # Add-on: Extract inventory_quantity (defaults to 0 if missing)
+    inventory_quantity = int(product_data.get("inventory_quantity", 0))
+
+    return in_stock, inventory_quantity

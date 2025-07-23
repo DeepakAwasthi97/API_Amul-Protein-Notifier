@@ -376,7 +376,17 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     user_info += f"Pincode: {user.get('pincode', 'Not set')}\n"
     products = user.get("products", ["Any"]) if user else ["Any"]
     product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
-    user_info += f"Tracked Products:\n{product_message}"
+    user_info += f"Tracked Products:\n{product_message}\n"
+
+    # Add notification preference
+    notification_preference = user.get("notification_preference", "until_stop")
+    preference_names = {
+        "once_and_stop": "🔔 Notify once and stop",
+        "once_per_restock": "🔄 Notify once per restock",
+        "until_stop": "♾️ Notify until /stop"
+    }
+    preference_name = preference_names.get(notification_preference, "Unknown")
+    user_info += f"Notification Preference: {preference_name}\n"
 
     # Escape the user's message and user_info
     escaped_user_info = escape_markdown(user_info)
