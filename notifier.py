@@ -30,7 +30,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
                         short_name = PRODUCT_NAME_MAP.get(name, name)
                         message += f"- {short_name} (Quantity Left: {quantity})\n"
                     logger.info(f"Sending 'Any' notification to chat_id {chat_id}: {len(in_stock_products)} products")
-                    # await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
             else:
                 in_stock_products = [(name, status, quantity) for name, status, quantity in notify_products if status == "In Stock"]
                 relevant_products = [(name, status, quantity) for name, status, quantity in in_stock_products
@@ -41,7 +41,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
                         short_name = PRODUCT_NAME_MAP.get(name, name)
                         message += f"- {short_name} (Quantity Left: {quantity})\n"
                     logger.info(f"Sending specific notification to chat_id {chat_id}: {len(relevant_products)} products")
-                    # await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
                 else:
                     logger.info(f"No relevant 'In Stock' products to notify for chat_id {chat_id}")
     except asyncio.TimeoutError:
