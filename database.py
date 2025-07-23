@@ -191,32 +191,32 @@ class Database:
             logging.error(f"Error closing database: {e}")
             raise
 
-async def get_state_changes_since(self, state_alias, product_name, since_time):
-    """Get all state changes for a product since a specific time."""
-    try:
-        async with self._connection.execute("""
-            SELECT status, timestamp FROM state_product_history 
-            WHERE state_alias = ? AND product_name = ? AND timestamp > ?
-            ORDER BY timestamp ASC
-        """, (state_alias, product_name, since_time)) as cursor:
-            rows = await cursor.fetchall()
-            return [{"status": row[0], "timestamp": row[1]} for row in rows]
-    except aiosqlite.Error as e:
-        logging.error(f"Error getting state changes: {e}")
-        return []
+    async def get_state_changes_since(self, state_alias, product_name, since_time):
+        """Get all state changes for a product since a specific time."""
+        try:
+            async with self._connection.execute("""
+                SELECT status, timestamp FROM state_product_history 
+                WHERE state_alias = ? AND product_name = ? AND timestamp > ?
+                ORDER BY timestamp ASC
+            """, (state_alias, product_name, since_time)) as cursor:
+                rows = await cursor.fetchall()
+                return [{"status": row[0], "timestamp": row[1]} for row in rows]
+        except aiosqlite.Error as e:
+            logging.error(f"Error getting state changes: {e}")
+            return []
 
-async def get_last_sold_out_before(self, state_alias, product_name, before_time):
-    """Get the last 'Sold Out' state before a specific time."""
-    try:
-        async with self._connection.execute("""
-            SELECT status, timestamp FROM state_product_history 
-            WHERE state_alias = ? AND product_name = ? AND status = 'Sold Out' AND timestamp < ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (state_alias, product_name, before_time)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                return {"status": row[0], "timestamp": row[1]}
+    async def get_last_sold_out_before(self, state_alias, product_name, before_time):
+        """Get the last 'Sold Out' state before a specific time."""
+        try:
+            async with self._connection.execute("""
+                SELECT status, timestamp FROM state_product_history 
+                WHERE state_alias = ? AND product_name = ? AND status = 'Sold Out' AND timestamp < ?
+                ORDER BY timestamp DESC LIMIT 1
+            """, (state_alias, product_name, before_time)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return {"status": row[0], "timestamp": row[1]}
+                return None
+        except aiosqlite.Error as e:
+            logging.error(f"Error getting last sold out state: {e}")
             return None
-    except aiosqlite.Error as e:
-        logging.error(f"Error getting last sold out state: {e}")
-        return None

@@ -93,7 +93,7 @@ async def check_product_availability_for_state(state_alias, sample_pincode, db):
             last_state = await db.get_last_state_change(state_alias, product_name)
             if not last_state or last_state["status"] != status or last_state["inventory_quantity"] != inventory_quantity:
                 await db.record_state_change(state_alias, product_name, status, inventory_quantity)
-                logger.info(f"State change recorded: {state_alias} - {product_name} - {status} (Quantity: {inventory_quantity})")
+                logger.info(f"State change recorded: {state_alias} - {product_name} - {status} (Quantity Left: {inventory_quantity})")
         # Restored: Update cache (now with quantity)
         if USE_SUBSTORE_CACHE:
             substore_cache[state_alias] = product_status
