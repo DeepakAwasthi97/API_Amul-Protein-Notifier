@@ -815,7 +815,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             user = context.user_data.get("cached_user", {})
             user["products"] = final_selection
             user["active"] = True
-
+            user["last_notified"] = {}  # Reset notification timestamps!
             logger.debug("Confirm Any for chat_id %s, final_selection: %s", chat_id, final_selection)
 
             try:
@@ -859,7 +859,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             user = context.user_data.get("cached_user", {})
             user["products"] = final_selection
             user["active"] = True
-
+            user["last_notified"] = {}  # Reset notification timestamps!
             product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p))
 
             if not product_message:

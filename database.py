@@ -2,8 +2,7 @@ import aiosqlite
 import json
 import logging
 import asyncio
-from datetime import datetime
-
+from datetime import datetime, timedelta
 class Database:
     def __init__(self, db_file):
         self.db_file = db_file
@@ -15,56 +14,50 @@ class Database:
             self._connection = await aiosqlite.connect(self.db_file)
             await self._connection.execute("PRAGMA journal_mode=WAL")
             await self.create_tables()
-            await self.migrate_tables()
+            # await self.migrate_tables()
             logging.info("Database initialized with WAL mode.")
         except aiosqlite.Error as e:
             logging.error(f"Error initializing database: {e}")
             raise
 
     async def create_tables(self):
-        """Create both users and state_product_history tables."""
         try:
-            # Create users table
             await self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     chat_id INTEGER PRIMARY KEY,
-                    data TEXT NOT NULL
+                    data TEXT
                 )
             """)
-            
-            # Create state_product_history table
             await self._connection.execute("""
-                CREATE TABLE IF NOT EXISTS state_product_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    state_alias TEXT NOT NULL,
-                    product_name TEXT NOT NULL,
-                    status TEXT NOT NULL, -- 'In Stock' or 'Sold Out'
-                    inventory_quantity INTEGER DEFAULT 0, -- New column for quantity
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(state_alias, product_name)
+                CREATE TABLE IF NOT EXISTS state_product_status (
+                    state_alias TEXT,
+                    product_name TEXT,
+                    status TEXT,
+                    inventory_quantity INTEGER,
+                    timestamp TEXT,
+                    PRIMARY KEY (state_alias, product_name)
                 )
             """)
-
-            await self._connection.commit()
-            logging.info("Database tables created or already exist.")
+            await self.commit()
         except aiosqlite.Error as e:
             logging.error(f"Error creating tables: {e}")
-            raise
 
-    async def migrate_tables(self):
-        """Migrate existing tables to add new columns if missing."""
-        try:
-            # Check if inventory_quantity exists; add if not
-            async with self._connection.execute("PRAGMA table_info(state_product_history)") as cursor:
-                columns = await cursor.fetchall()
-                column_names = [col[1] for col in columns]
-                if "inventory_quantity" not in column_names:
-                    await self._connection.execute("ALTER TABLE state_product_history ADD COLUMN inventory_quantity INTEGER DEFAULT 0")
-                    await self._connection.commit()
-                    logging.info("Added inventory_quantity column to state_product_history table.")
-        except aiosqlite.Error as e:
-            logging.error(f"Error migrating tables: {e}")
-            raise
+    # async def migrate_tables(self):
+    #     try:
+    #         async with self._connection.execute("PRAGMA table_info(state_product_history)") as cursor:
+    #             columns = [row[1] for row in await cursor.fetchall()]
+    #             if "inventory_quantity" in columns or "unique" in [row[5].lower() for row in await cursor.fetchall()]:
+    #                 # Migrate old state_product_history to state_product_status
+    #                 await self._connection.execute("""
+    #                     INSERT OR REPLACE INTO state_product_status (state_alias, product_name, status, inventory_quantity, timestamp)
+    #                     SELECT state_alias, product_name, status, inventory_quantity, timestamp
+    #                     FROM state_product_history
+    #                 """)
+    #                 await self._connection.execute("DROP TABLE IF EXISTS state_product_history")
+    #                 await self.create_tables()
+    #                 logging.info("Migrated state_product_history to new schema")
+    #     except aiosqlite.Error as e:
+    #         logging.error(f"Error migrating tables: {e}")
 
     async def add_user(self, chat_id, user_data):
         """Add or update a user in the database."""
@@ -142,29 +135,32 @@ class Database:
             return []
 
     async def record_state_change(self, state_alias, product_name, status, inventory_quantity):
-        """Record a state change with inventory quantity in the state_product_history table."""
         try:
             await self._connection.execute("""
-                INSERT OR REPLACE INTO state_product_history
-                (state_alias, product_name, status, inventory_quantity, timestamp)
+                INSERT OR REPLACE INTO state_product_status (state_alias, product_name, status, inventory_quantity, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            """, (state_alias, product_name, status, inventory_quantity, datetime.now()))
-            await self._connection.commit()
-            logging.debug(f"State change recorded: {state_alias} - {product_name} - {status} (Quantity: {inventory_quantity})")
+            """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
+            last_state = await self.get_last_state_change(state_alias, product_name)
+            if not last_state or last_state["status"] != status:
+                await self._connection.execute("""
+                    INSERT INTO state_product_status (state_alias, product_name, status, timestamp)
+                    VALUES (?, ?, ?, ?)
+                """, (state_alias, product_name, status, datetime.now().isoformat()))
+                logging.info(f"State transition recorded: {state_alias} - {product_name} - {status}")
+            await self.commit()
         except aiosqlite.Error as e:
             logging.error(f"Error recording state change: {e}")
 
     async def get_last_state_change(self, state_alias, product_name):
-        """Get the last recorded state and quantity for a product in a state."""
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp, inventory_quantity FROM state_product_history
+                SELECT status, inventory_quantity, timestamp
+                FROM state_product_status
                 WHERE state_alias = ? AND product_name = ?
-                ORDER BY timestamp DESC LIMIT 1
             """, (state_alias, product_name)) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    return {"status": row[0], "timestamp": row[1], "inventory_quantity": row[2]}
+                    return {"status": row[0], "inventory_quantity": row[1], "timestamp": row[2]}
                 return None
         except aiosqlite.Error as e:
             logging.error(f"Error getting last state change: {e}")
@@ -192,10 +188,9 @@ class Database:
             raise
 
     async def get_state_changes_since(self, state_alias, product_name, since_time):
-        """Get all state changes for a product since a specific time."""
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp FROM state_product_history 
+                SELECT status, timestamp FROM state_product_status
                 WHERE state_alias = ? AND product_name = ? AND timestamp > ?
                 ORDER BY timestamp ASC
             """, (state_alias, product_name, since_time)) as cursor:
@@ -209,7 +204,7 @@ class Database:
         """Get the last 'Sold Out' state before a specific time."""
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp FROM state_product_history 
+                SELECT status, timestamp FROM state_product_status 
                 WHERE state_alias = ? AND product_name = ? AND status = 'Sold Out' AND timestamp < ?
                 ORDER BY timestamp DESC LIMIT 1
             """, (state_alias, product_name, before_time)) as cursor:
@@ -220,3 +215,12 @@ class Database:
         except aiosqlite.Error as e:
             logging.error(f"Error getting last sold out state: {e}")
             return None
+    
+    async def cleanup_state_history(self, days=30):
+        try:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            await self._connection.execute("DELETE FROM state_product_status WHERE timestamp < ?", (cutoff,))
+            await self.commit()
+            logging.info(f"Cleaned up state_product_status older than {days} days")
+        except aiosqlite.Error as e:
+            logging.error(f"Error cleaning up state history: {e}")

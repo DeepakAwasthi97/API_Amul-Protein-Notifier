@@ -59,21 +59,39 @@ def is_product_in_stock(product_data, substore_id):
     Robustly determine if a product is in stock:
     - available == 1
     - substore_id is in seller_substore_ids
-    - Now returns a tuple: (in_stock: bool, inventory_quantity: int)
+    - Returns a tuple: (in_stock: bool, inventory_quantity: int)
     """
+    logger = logging.getLogger(__name__)
+    product_name = product_data.get("name", "Unknown")
+    product_alias = product_data.get("alias", "Unknown")
+
+    # Validate available
+    available_raw = product_data.get("available", "0")
     try:
-        available = int(product_data.get("available", 0))
-    except Exception:
+        available = int(available_raw) if available_raw is not None else 0
+    except (ValueError, TypeError):
         available = 0
+        logger.warning(f"Invalid 'available' field '{available_raw}' for product '{product_name}' (alias: {product_alias})")
 
+    # Validate seller_substore_ids
     seller_substore_ids = product_data.get("seller_substore_ids", [])
+    if not isinstance(seller_substore_ids, list):
+        logger.warning(f"Invalid 'seller_substore_ids' type {type(seller_substore_ids)} for product '{product_name}' (alias: {product_alias}), defaulting to []")
+        seller_substore_ids = []
 
-    # Handle comma-separated substore_id
+    # Handle substore_id
     substore_ids = [id.strip() for id in substore_id.split(',') if id.strip()] if ',' in substore_id else [substore_id]
-
     in_stock = available == 1 and any(sid in seller_substore_ids for sid in substore_ids)
 
-    # Add-on: Extract inventory_quantity (defaults to 0 if missing)
-    inventory_quantity = int(product_data.get("inventory_quantity", 0))
+    # Validate inventory_quantity
+    inventory_quantity_raw = product_data.get("inventory_quantity", "0")
+    try:
+        inventory_quantity = int(inventory_quantity_raw) if inventory_quantity_raw is not None else 0
+        if inventory_quantity < 0:
+            inventory_quantity = 0
+            logger.warning(f"Negative inventory_quantity {inventory_quantity_raw} for product '{product_name}' (alias: {product_alias}), set to 0")
+    except (ValueError, TypeError):
+        inventory_quantity = 0
+        logger.warning(f"Invalid inventory_quantity '{inventory_quantity_raw}' for product '{product_name}' (alias: {product_alias}), set to 0")
 
     return in_stock, inventory_quantity

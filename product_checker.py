@@ -14,19 +14,16 @@ from collections import Counter  # For state counting if needed
 from telegram.ext import Application
 from common import PRODUCT_NAME_MAP, PRODUCT_ALIAS_MAP
 import cloudscraper  # Ensure imported for dynamic mapping
-
+import aiohttp
 # Ensure the current directory is in the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger(__name__)
 
 async def get_products_availability_api_only_async(pincode, max_concurrent_products=SEMAPHORE_LIMIT):
+    logger = logging.getLogger(__name__)
     try:
-        import cloudscraper
-        import aiohttp
-        # Initialize cloudscraper session
         sync_session = cloudscraper.create_scraper()
-        # Get initial tid, substore, substore_id, and cookies
         tid, substore, substore_id, cookies = get_tid_and_substore(sync_session, pincode)
         async with aiohttp.ClientSession(cookies=cookies) as session:
             semaphore = asyncio.Semaphore(max_concurrent_products)
@@ -35,34 +32,45 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
                 alias = PRODUCT_ALIAS_MAP[product_name]
                 task = fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, cookies=cookies)
                 tasks.append((product_name, alias, task))
-            # Gather results concurrently
             product_status = []
             results = await asyncio.gather(*[task for _, _, task in tasks], return_exceptions=True)
             result_idx = 0
             for product_name, alias, task in tasks:
-                data = results[result_idx] if result_idx < len(results) else None
-                result_idx += 1
-                if isinstance(data, Exception):
-                    logger.error(f"Error for alias '{alias}' (pincode: {pincode}): {str(data)}")
-                    continue
-                if data is None:
-                    logger.warning(f"Session expired for alias '{alias}' (pincode: {pincode}). Refreshing session...")
-                    sync_session = cloudscraper.create_scraper()
-                    try:
-                        tid, substore, substore_id, cookies = get_tid_and_substore(sync_session, pincode)
-                        session.cookie_jar.update_cookies(cookies)
-                        data = await fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, cookies=cookies)
-                    except Exception as e:
-                        logger.error(f"Retry failed for alias '{alias}' (pincode: {pincode}): {str(e)}")
+                try:
+                    data = results[result_idx] if result_idx < len(results) else None
+                    result_idx += 1
+                    if isinstance(data, Exception):
+                        logger.error(f"Error fetching data for product '{product_name}' (alias: {alias}, pincode: {pincode}): {str(data)}")
                         continue
-                if data:
+                    if data is None:
+                        logger.warning(f"Session expired for product '{product_name}' (alias: {alias}, pincode: {pincode}). Refreshing session...")
+                        sync_session = cloudscraper.create_scraper()
+                        try:
+                            tid, substore, substore_id, cookies = get_tid_and_substore(sync_session, pincode)
+                            session.cookie_jar.update_cookies(cookies)
+                            data = await fetch_product_data_for_alias_async(session, tid, substore_id, alias, semaphore, cookies=cookies)
+                        except Exception as e:
+                            logger.error(f"Retry failed for product '{product_name}' (alias: {alias}, pincode: {pincode}): {str(e)}")
+                            continue
+                    if not data:
+                        logger.warning(f"No data returned for product '{product_name}' (alias: {alias}, pincode: {pincode})")
+                        continue
                     item = data[0]  # Raw item dict from API
-                    in_stock, inventory_quantity = is_product_in_stock(item, substore_id)  # Updated: Use tuple from utils.py
-                    status = "In Stock" if in_stock else "Sold Out"
-                    product_status.append((product_name, status, inventory_quantity))  # Include quantity
-                else:
-                    logger.warning(f"No data returned for alias '{alias}' (pincode: {pincode})")
+                    try:
+                        in_stock, inventory_quantity = is_product_in_stock(item, substore_id)
+                        status = "In Stock" if in_stock else "Sold Out"
+                        product_status.append((product_name, status, inventory_quantity))
+                        logger.debug(f"Processed product '{product_name}' (alias: {alias}, pincode: {pincode}): {status}, quantity: {inventory_quantity}")
+                    except Exception as e:
+                        logger.error(f"Error processing product '{product_name}' (alias: {alias}, pincode: {pincode}): {str(e)}")
+                        continue
+                except Exception as e:
+                    logger.error(f"Unexpected error for product '{product_name}' (alias: {alias}, pincode: {pincode}): {str(e)}")
                     continue
+            if not product_status:
+                logger.error(f"No valid products processed for pincode {pincode}")
+            else:
+                logger.info(f"Successfully processed {len(product_status)} products for pincode {pincode}")
             return product_status, substore_id, substore
     except Exception as e:
         logger.error(f"API-only error for pincode {pincode}: {str(e)}")
@@ -71,13 +79,11 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
 async def check_product_availability_for_state(state_alias, sample_pincode, db):
     logger.info(f"Checking state {state_alias} with sample pincode: {sample_pincode}")
     try:
-        # Restored: Check cache first if enabled
         if USE_SUBSTORE_CACHE:
             cached_status = substore_cache.get(state_alias)
             if cached_status:
                 logger.info(f"Cache hit for state {state_alias}")
                 return cached_status
-        # Fallback to pincode cache if enabled and no substore cache hit
         elif FALLBACK_TO_PINCODE_CACHE:
             cached_status = pincode_cache.get(sample_pincode)
             if cached_status:
@@ -88,13 +94,8 @@ async def check_product_availability_for_state(state_alias, sample_pincode, db):
             logger.error(f"No product status returned for state {state_alias} (pincode: {sample_pincode})")
             return []
         logger.info(f"Processed {len(product_status)} products for state {state_alias}")
-        # Updated: Record state changes with quantity
         for product_name, status, inventory_quantity in product_status:
-            last_state = await db.get_last_state_change(state_alias, product_name)
-            if not last_state or last_state["status"] != status or last_state["inventory_quantity"] != inventory_quantity:
-                await db.record_state_change(state_alias, product_name, status, inventory_quantity)
-                logger.info(f"State change recorded: {state_alias} - {product_name} - {status} (Quantity Left: {inventory_quantity})")
-        # Restored: Update cache (now with quantity)
+            await db.record_state_change(state_alias, product_name, status, inventory_quantity)
         if USE_SUBSTORE_CACHE:
             substore_cache[state_alias] = product_status
         elif FALLBACK_TO_PINCODE_CACHE:
@@ -120,26 +121,24 @@ async def should_notify_user(user, product_name, current_status, state_alias, db
     elif notification_preference == "once_per_restock":
         last_notification_time = last_notified.get(product_name)
         if not last_notification_time:
+            logger.info(f"No last notification for {product_name}, notifying for chat_id {chat_id}")
             return True
         last_state = await db.get_last_state_change(state_alias, product_name)
         if not last_state:
-            return True  # No state history, assume first check
+            logger.info(f"No state history for {product_name} in {state_alias}, assuming first restock")
+            return True
         try:
             last_notified_time = datetime.fromisoformat(last_notification_time)
             last_state_time = datetime.fromisoformat(last_state["timestamp"])
             previous_states = await db.get_state_changes_since(state_alias, product_name, last_notified_time)
             if any(state['status'] == 'Sold Out' for state in previous_states):
+                logger.info(f"Restock detected for {product_name} in {state_alias}")
                 return True
-            # Fallback: If last state was "Sold Out" and occurred after last notification
-            if last_state["status"] == "Sold Out" and last_state_time > last_notified_time and current_status == "In Stock":
+            if last_state["status"] == "Sold Out" and last_state_time > last_notified_time:
+                logger.info(f"Fallback restock detected for {product_name} in {state_alias}")
                 return True
+            logger.debug(f"No restock for {product_name} in {state_alias}: still In Stock since {last_notified_time}")
             return False
-             # Old code logic (commented out for clarity)
-            # if last_state_time > last_notified_time:
-            #     last_sold_out = await db.get_last_sold_out_before(state_alias, product_name, datetime.now())
-            #     if last_sold_out and last_sold_out["timestamp"] > last_notified_time:
-            #         return True
-            # return False
         except Exception as e:
             logger.error(f"Error checking restock status for chat_id {chat_id}: {e}")
             return False
@@ -155,21 +154,25 @@ async def update_user_notification_tracking(user, product_name, db):
     # Update user in database
     await db.update_user(chat_id, user)
 
-
 async def check_products_for_users():
     """Check products for all users and send notifications."""
+
     db = Database(DATABASE_FILE)
     logger.info(f"Database object type: {type(db)}, methods: {dir(db)}")
     await db._init_db()
+
     try:
         users_data = await db.get_all_users()
         active_users = [u for u in users_data if u.get("active", False)]
         if not active_users:
             logger.info("No active users to check")
             return
+
         logger.info(f"Found {len(active_users)} active users")
+
         # Restored: Load dynamic substore mapping
         substore_info = load_substore_mapping()
+
         # Group users by state_alias (preserved, but add dynamic handling)
         state_groups = {}
         pincode_to_state = {}
@@ -181,7 +184,7 @@ async def check_products_for_users():
                     pincode = pincode.strip()
                     if pincode:
                         pincode_to_state[pincode] = state_alias
-        # Restored: Handle users with unmapped pincodes dynamically
+        # Handle users with unmapped pincodes dynamically
         unmapped_users = []
         for user in active_users:
             pincode = str(user.get('pincode', ''))
@@ -192,12 +195,9 @@ async def check_products_for_users():
                 # Dynamic fetch and update
                 logger.warning(f"No state found for pincode {pincode}. Fetching dynamically...")
                 try:
-                    # Use sync fetch for simplicity (or make async if needed)
                     sync_session = cloudscraper.create_scraper()
                     tid, substore, substore_id, cookies = get_tid_and_substore(sync_session, pincode)
-                    # Extract alias from fetched substore
                     fetched_alias = substore.get("alias", f"unknown-{pincode}")
-                    # Check if this alias already exists in substore_info
                     existing_entry = next((entry for entry in substore_info if entry.get("alias") == fetched_alias), None)
                     if existing_entry:
                         # Append to existing entry
@@ -226,64 +226,101 @@ async def check_products_for_users():
                     save_substore_mapping(substore_info)
                     # Update in-memory
                     pincode_to_state[pincode] = state_alias
-                    substore_pincode_map[pincode] = substore_id  # Restore cache update
+                    substore_pincode_map[pincode] = substore_id
                     state_groups.setdefault(state_alias, []).append(user)
                 except Exception as e:
                     logger.error(f"Failed to dynamically map pincode {pincode}: {str(e)}. Skipping user.")
-                    unmapped_users.append(user)  # Or handle fallback
+                    unmapped_users.append(user)
                     continue
+
         states_to_check = [alias for alias, users in state_groups.items() if users]
         logger.info(f"Checking {len(states_to_check)} states with users")
+
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         await app.initialize()
+
         try:
-                state_tasks = []
-                for state_alias in states_to_check:
-                    users_in_state = state_groups[state_alias]
-                    sample_pincode = users_in_state[0].get('pincode')
-                    task = asyncio.create_task(check_product_availability_for_state(state_alias, sample_pincode, db))
-                    state_tasks.append((state_alias, task))
-                # Gather results concurrently
-                results = await asyncio.gather(*[task for _, task in state_tasks], return_exceptions=True)
-                # Recommended logging: Check for task exceptions
-                for state_alias, result in zip([state_alias for state_alias, _ in state_tasks], results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Error processing state {state_alias}: {str(result)}")
-                for idx, (state_alias, _) in enumerate(state_tasks):
-                    product_status = results[idx] if not isinstance(results[idx], Exception) else []
-                    if not product_status:
-                        logger.warning(f"No product status for state {state_alias}")
+            state_tasks = []
+            for state_alias in states_to_check:
+                users_in_state = state_groups[state_alias]
+                sample_pincode = users_in_state[0].get('pincode')
+                task = asyncio.create_task(check_product_availability_for_state(state_alias, sample_pincode, db))
+                state_tasks.append((state_alias, task))
+
+            # Gather results concurrently
+            results = await asyncio.gather(*[task for _, task in state_tasks], return_exceptions=True)
+
+            # Check for task exceptions
+            for state_alias, result in zip([state_alias for state_alias, _ in state_tasks], results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing state {state_alias}: {str(result)}")
+
+            for idx, (state_alias, _) in enumerate(state_tasks):
+                product_status = results[idx] if not isinstance(results[idx], Exception) else []
+                if not product_status:
+                    logger.warning(f"No product status for state {state_alias}")
+                    continue
+
+                # Notify users in this state based on their preferences
+                notification_tasks = []
+
+                for user in state_groups[state_alias]:
+                    chat_id = user.get("chat_id")
+                    products_to_check = user.get("products", [])
+                    if not chat_id or not products_to_check:
                         continue
-                    # Notify users in this state based on their preferences
-                    notification_tasks = []
-                    for user in state_groups[state_alias]:
-                        chat_id = user.get("chat_id")
-                        products_to_check = user.get("products", [])
-                        if not chat_id or not products_to_check:
-                            continue
-                        # Fixed: Define check_all_products before the loop
-                        check_all_products = len(products_to_check) == 1 and products_to_check[0].lower() == "any"
-                        # Filter products based on notification preferences
-                        notify_products = []
-                        all_product_names = [name for name, _, _ in product_status] if check_all_products else products_to_check  # Updated for quantity
+
+                    check_all_products = len(products_to_check) == 1 and products_to_check[0].strip().lower() == "any"
+                    preference = user.get("notification_preference", "until_stop")
+                    notify_products = []
+                    all_product_names = [name for name, _, _ in product_status] if check_all_products else products_to_check
+
+                    # --- PATCH: Advanced handling for once_per_restock ---
+                    if preference == "once_per_restock":
+                        # Step 1: Did any product restock? (per previous logic)
+                        restocked_products = [
+                            product_name
+                            for product_name, status, inventory_quantity in product_status
+                            if (check_all_products or product_name in all_product_names)
+                                and await should_notify_user(user, product_name, status, state_alias, db)
+                        ]
+                        if restocked_products:
+                            # Step 2: Notify for ALL currently in stock tracked products
+                            notify_products = [
+                                (product_name, status, inventory_quantity)
+                                for product_name, status, inventory_quantity in product_status
+                                if status == "In Stock" and (check_all_products or product_name in all_product_names)
+                            ]
+                            # Step 3: Update last_notified for ALL notified products
+                            for product_name, _, _ in notify_products:
+                                await update_user_notification_tracking(user, product_name, db)
+                        # else: no notification, notify_products stays empty
+
+                    else:
+                        # Standard per-product logic (until_stop, once_and_stop)
                         for product_name, status, inventory_quantity in product_status:
                             if check_all_products or product_name in all_product_names:
                                 if await should_notify_user(user, product_name, status, state_alias, db):
                                     notify_products.append((product_name, status, inventory_quantity))
-                                    await update_user_notification_tracking(user, product_name, db)     
-                        if notify_products: 
-                            task = asyncio.create_task(
-                                send_telegram_notification_for_user(
-                                    app, chat_id, user.get('pincode'), products_to_check, notify_products
-                                )
+                                    await update_user_notification_tracking(user, product_name, db)
+
+                    if notify_products:
+                        task = asyncio.create_task(
+                            send_telegram_notification_for_user(
+                                app, chat_id, user.get('pincode'), products_to_check, notify_products
                             )
-                            notification_tasks.append(task)
-                    if notification_tasks:
-                        await asyncio.gather(*notification_tasks, return_exceptions=True)
-                    logger.info(f"Completed notifications for state {state_alias}")
+                        )
+                        notification_tasks.append(task)
+
+                if notification_tasks:
+                    await asyncio.gather(*notification_tasks, return_exceptions=True)
+                logger.info(f"Completed notifications for state {state_alias}")
+
         finally:
             await app.shutdown()
             logger.info("Telegram application shutdown completed")
+
     finally:
         await db.close()
         logger.info("Database connection closed")
+        logger.info("Product check completed")

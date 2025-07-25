@@ -19,3 +19,6 @@ users.db-shm
 users.db-wal
 # Exclude IDE and editor specific files
 sqlite3.exe
+substore_list.py
+test_notification_logic.py
+test_users.db

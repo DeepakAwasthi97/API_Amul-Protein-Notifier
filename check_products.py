@@ -7,6 +7,8 @@ from utils import setup_logging
 from common import is_already_running
 import time
 import signal
+from product_checker import check_products_for_users
+import asyncio
 
 # --- All logic is now in the respective modules ---
 # Only main() and script entrypoint remain here
@@ -33,8 +35,6 @@ def main():
         if is_already_running("check_products.py"):
             logger.error("Another instance of check_products.py is already running. Exiting...")
             raise SystemExit(1)
-        from product_checker import check_products_for_users
-        import asyncio
         asyncio.run(check_products_for_users())
         total_time = time.time() - start_time
         minutes, seconds = divmod(total_time, 60)
