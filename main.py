@@ -812,83 +812,108 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         elif action == "products_confirm_Any":
             final_selection = ["Any"]
-            user = context.user_data.get("cached_user", {})
+            # FIX: Fetch from DB, not cached_user!
+            user = await db.get_user(chat_id)
+            if not user:
+                user = {"chat_id": chat_id}
             user["products"] = final_selection
             user["active"] = True
-            user["last_notified"] = {}  # Reset notification timestamps!
-            logger.debug("Confirm Any for chat_id %s, final_selection: %s", chat_id, final_selection)
-
+            user["last_notified"] = {}
             try:
                 await query.edit_message_text("✅ Saving your selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
                 logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-
             try:
                 await db.update_user(chat_id, user)
                 await db.commit()
-                await query.edit_message_text("✅ Your selection has been saved. \nYou will be notified if any of the Amul Protein product is available❗.")
+                await query.edit_message_text(
+                    "✅ Your selection has been saved. \nYou will be notified if any of the Amul Protein product is available❗."
+                )
             except Exception as e:
                 await db.rollback()
                 logger.error("Database error for chat_id %s: %s", chat_id, str(e))
-                await query.edit_message_text("⚠️ Failed to save your selection. Please try again later.")
-
+                await query.edit_message_text(
+                    "⚠️ Failed to save your selection. Please try again later."
+                )
+            # Clear state etc...
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
-
             logger.info("Confirm Any took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
-            return ConversationHandler.END  # End conversation after confirmation
+            return ConversationHandler.END
+
 
         elif action == "products_confirm":
             if not selected_products:
-                user = context.user_data.get("cached_user", {})
+                user = await db.get_user(chat_id)
+                if not user:
+                    user = {"chat_id": chat_id}
                 current_tracked_products = user.get("products", ["Any"])
-                product_message = "All of the available Amul Protein products 🧀" if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in current_tracked_products)
-
-                await query.edit_message_text(f"⚠️ No products were selected. You are currently tracking:\n{product_message}")
-
+                product_message = (
+                    "All of the available Amul Protein products 🧀"
+                    if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any"
+                    else "\n".join(
+                        f"- {common.PRODUCT_NAME_MAP.get(p, p)}"
+                        for p in current_tracked_products
+                    )
+                )
+                await query.edit_message_text(
+                    f"⚠️ No products were selected. You are currently tracking:\n{product_message}"
+                )
+                # Clear state etc...
                 for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                     del context.user_data[key]
                 context.user_data["selected_products"] = set()
-
                 logger.info("Confirm (no selection) took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
-                return ConversationHandler.END  # End conversation after no selection
+                return ConversationHandler.END
 
             final_selection = ["Any"] if "Any" in selected_products else list(selected_products)
-            user = context.user_data.get("cached_user", {})
+            # FIX: Always start from DB, not cached_user
+            user = await db.get_user(chat_id)
+            if not user:
+                user = {"chat_id": chat_id}
             user["products"] = final_selection
             user["active"] = True
-            user["last_notified"] = {}  # Reset notification timestamps!
-            product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p))
-
+            user["last_notified"] = {}
+            product_message = "\n".join(
+                f"- {common.PRODUCT_NAME_MAP.get(p, p)}"
+                for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p)
+            )
             if not product_message:
                 product_message = "No valid product names available."
-                logger.warning("Empty product message for chat_id %s, final_selection: %s", chat_id, final_selection)
-
-            logger.debug("Confirm selection for chat_id %s, final_selection: %s", chat_id, final_selection)
-
+                logger.warning(
+                    "Empty product message for chat_id %s, final_selection: %s",
+                    chat_id, final_selection
+                )
+            logger.debug(
+                "Confirm selection for chat_id %s, final_selection: %s",
+                chat_id, final_selection
+            )
             try:
                 await query.edit_message_text("✅ Saving your selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
-                logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
-
+                logger.debug(
+                    "Failed to edit message for chat_id %s: %s", chat_id, str(e)
+                )
             try:
                 await db.update_user(chat_id, user)
                 await db.commit()
-                await query.edit_message_text(f"✅ Your selections have been saved. You will be notified for:\n{product_message}")
+                await query.edit_message_text(
+                    f"✅ Your selections have been saved. You will be notified for:\n{product_message}"
+                )
             except Exception as e:
                 await db.rollback()
                 logger.error("Database error for chat_id %s: %s", chat_id, str(e))
                 await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
-
+            # Clear state etc...
             for key in [key for key in context.user_data if key.startswith("product_menu_")]:
                 del context.user_data[key]
             context.user_data["selected_products"] = set()
-
             logger.info("Confirm selection took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
-            return ConversationHandler.END  # End conversation after confirmation
+            return ConversationHandler.END
+
 
         elif action == "products_clear_and_back_to_main":
             try:
