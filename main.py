@@ -32,7 +32,12 @@ logger.setLevel(logging.DEBUG)
 db = None
 
 # Conversation states
-AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_ADMIN_REPLY, AWAITING_NOTIFICATION_PREFERENCE = range(5)
+AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_UNFOLLOW_SELECTION, AWAITING_ADMIN_REPLY, AWAITING_NOTIFICATION_PREFERENCE = range(6)
+
+# --- Callback Data Prefixes ---
+UNFOLLOW_TOGGLE_PREFIX = "unfollow_toggle_" # For toggling selection
+UNFOLLOW_CONFIRM = "unfollow_confirm"       # For confirm button
+UNFOLLOW_CANCEL = "unfollow_cancel"         # For cancel button
 
 # Simple escape_markdown function (from prev_main.py)
 def escape_markdown(text):
@@ -900,9 +905,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             try:
                 await db.update_user(chat_id, user)
                 await db.commit()
-                await query.edit_message_text(
-                    f"✅ Your selections have been saved. You will be notified for:\n{product_message}"
-                )
+                await query.edit_message_text(f"✅ Your selections have been saved.\nYou will be notified for:\n \n{product_message}")
             except Exception as e:
                 await db.rollback()
                 logger.error("Database error for chat_id %s: %s", chat_id, str(e))
@@ -1052,7 +1055,7 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the current status and settings for the user."""
     chat_id = update.effective_chat.id
-    logger.info("Handling /status command for chat_id %s", chat_id)
+    logger.info("Handling /my_settings command for chat_id %s", chat_id)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     user = await db.get_user(chat_id)
@@ -1085,6 +1088,219 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(status_text, parse_mode="Markdown")
     else:
         await update.message.reply_text("ℹ️ You are not registered. Use /setpincode to begin.")
+
+async def unfollow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows the tabloid menu allowing user to unsubscribe from a product notification he previously selected."""
+
+    chat_id = update.effective_chat.id
+    logger.info(">>> Handling /unfollow command for chat_id %s", chat_id)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    user = await db.get_user(chat_id)
+
+    if not user:
+        await update.message.reply_text("ℹ️ You are not registered. Use /setpincode to begin.")
+        return ConversationHandler.END # End conversation if user not registered
+
+    products_followed  = user.get("products", [])
+    if not products_followed or len(products_followed ) == 1 and products_followed [0].lower() == "any":
+        # Early exit if no specific products to unfollow
+
+        await update.message.reply_text(
+            "ℹ️ You are currently following all products or no specific products. "
+            "Please consider setting up a list of products to follow using the /setproducts command."
+        )
+        return ConversationHandler.END # End conversation
+
+    tabloid_keyboard_ui = [] # This will hold rows of InlineKeyboardButtons
+    context.user_data["original_products_followed_list"] = products_followed  # stores the original followed list of products
+    context.user_data["curr_products_to_unfollow"] = set() # stores the ids of the products that the user wishes to unfollow at the moment
+    for product in products_followed :
+        product_display_name  = common.PRODUCT_NAME_MAP.get(product, product)
+        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
+        callback_data_arg = f"{UNFOLLOW_TOGGLE_PREFIX}{product_temp_id}"
+        tabloid_keyboard_ui.append(
+            [InlineKeyboardButton(f"Unfollow {product_display_name }", callback_data=callback_data_arg)],
+        )
+    tabloid_keyboard_ui.append([
+        InlineKeyboardButton("✅ Confirm Unfollow", callback_data=UNFOLLOW_CONFIRM),
+        InlineKeyboardButton("❌ Cancel", callback_data=UNFOLLOW_CANCEL)
+    ])
+
+    reply_markup = InlineKeyboardMarkup(tabloid_keyboard_ui)
+    # Send the message and store its ID for future edits
+    sent_message = await update.message.reply_text(
+        "Select products to unfollow (click again to deselect):",
+        reply_markup=reply_markup
+    )
+    context.user_data["cached_user"] = user
+    context.user_data["unfollow_message_id"] = sent_message.message_id
+    context.user_data["unfollow_chat_id"] = sent_message.chat_id # Redundant but good practice for clarity
+
+    return AWAITING_UNFOLLOW_SELECTION
+    
+
+async def unfollow_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Handles toggling product selection for unfollow.
+    This handler assumes it's operating within AWAITING_UNFOLLOW_SELECTION state
+    and that context.user_data has 'original_products_followed_list' and 'curr_products_to_unfollow'.
+    """
+    query = update.callback_query
+    chat_id = query.from_user.id
+    
+    logger.info(">>> Handling unfollow toggle callback for chat_id %s with data: %s", chat_id, query.data)
+
+    await query.answer() # Always answer the callback query
+
+    # Extract the product key to toggle
+    product_temp_id_to_toggle = query.data[len(UNFOLLOW_TOGGLE_PREFIX):]
+
+    # Get the sets from user_data
+    curr_products_to_unfollow_set = context.user_data.get("curr_products_to_unfollow")
+    original_products_list = context.user_data.get("original_products_followed_list")
+
+    # Check if user is active
+    user = await db.get_user(chat_id)
+    if not user or not user.get("active", False):
+        logger.warning("Inactive or non-existent user for chat_id %s", chat_id)
+        await query.answer("User inactive or not found. Use /start to reactivate.")
+        return ConversationHandler.END
+
+    if curr_products_to_unfollow_set is None or original_products_list is None:
+        logger.error("State data missing for user %s during unfollow toggle. Ending conversation.", chat_id)
+        await query.message.reply_text("An error occurred. Please restart with /unfollow.")
+        return ConversationHandler.END # Something went wrong, end the conversation
+
+    # Toggle the product in the selection set
+    if product_temp_id_to_toggle in curr_products_to_unfollow_set:
+        curr_products_to_unfollow_set.remove(product_temp_id_to_toggle)
+    else:
+        curr_products_to_unfollow_set.add(product_temp_id_to_toggle)
+    
+    # --- Rebuild the Inline Keyboard with updated selections ---
+    updated_keyboard_rows = []
+    for product in original_products_list:
+        product_display_name = common.PRODUCT_NAME_MAP.get(product, product)
+        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
+        
+        # Determine the marker based on whether the product is in the current selection set
+        marker = "🚫" if product_temp_id in curr_products_to_unfollow_set else "Unfollow "
+        
+        callback_data_arg = f"{UNFOLLOW_TOGGLE_PREFIX}{product_temp_id}" 
+        updated_keyboard_rows.append(
+            [InlineKeyboardButton(f"{marker} {product_display_name}", callback_data=callback_data_arg)]
+        )
+    
+    # Re-add Confirm and Cancel buttons
+    updated_keyboard_rows.append([
+        InlineKeyboardButton("✅ Confirm Unfollow", callback_data=UNFOLLOW_CONFIRM),
+        InlineKeyboardButton("❌ Cancel", callback_data=UNFOLLOW_CANCEL)
+    ])
+    
+    updated_reply_markup = InlineKeyboardMarkup(updated_keyboard_rows)
+
+    # Edit the original message to reflect the updated keyboard
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=context.user_data["unfollow_chat_id"],
+            message_id=context.user_data["unfollow_message_id"],
+            reply_markup=updated_reply_markup
+        )
+    except Exception as e:
+        logger.error("Failed to edit message for user %s: %s", chat_id, e)
+        # If editing fails (e.g., message too old), send a new list
+        await query.message.reply_text(
+            "An error occurred while updating the selection. Please try again with /unfollow."
+        )
+        # Update message ID if a new message was sent
+        if query.message.message_id != context.user_data["unfollow_message_id"]:
+            context.user_data["unfollow_message_id"] = query.message.message_id
+            context.user_data["unfollow_chat_id"] = query.message.chat_id
+
+    return AWAITING_UNFOLLOW_SELECTION # Stay in the same state
+
+async def confirm_unfollow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    
+    await query.answer("Processing your request...")
+
+    curr_products_to_unfollow_list = context.user_data.get("curr_products_to_unfollow", set())
+    original_products_list = context.user_data.get("original_products_followed_list", [])
+
+    if not curr_products_to_unfollow_list:
+        await query.edit_message_text("No products selected to unfollow. Operation cancelled.")
+        # Clear state data
+        context.user_data.pop("curr_products_to_unfollow", None)
+        context.user_data.pop("original_products_followed_list", None)
+        context.user_data.pop("unfollow_message_id", None)
+        context.user_data.pop("unfollow_chat_id", None)
+        return ConversationHandler.END
+
+    # Filter out the selected products from the user's current subscriptions
+    updated_subscriptions = []
+    updated_subscriptions_display_text ="\n You will be notified for: \n"
+    print(f'original_products_list : {original_products_list}, curr_products_to_unfollow_list: {curr_products_to_unfollow_list}')
+
+    for product in original_products_list:
+        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
+        product_display_name  = common.PRODUCT_NAME_MAP.get(product, product)
+        if product_temp_id not in curr_products_to_unfollow_list:
+            updated_subscriptions_display_text += f"\n - {product_display_name}"
+            updated_subscriptions.append(product)
+
+    print(f'updated_subscriptions : {updated_subscriptions}')
+    user = context.user_data.get("cached_user", {})
+    unfollow_chat_id = context.user_data.get("unfollow_chat_id", 'unfollow_chat_id_not_found')
+
+    #update the object
+    user["products"] = updated_subscriptions
+    user["active"] = True
+    user["last_notified"] = {}  # Reset notification timestamps!
+
+    logger.debug("Confirm selection for chat_id %s, final_selection: %s", unfollow_chat_id, updated_subscriptions)
+
+    try:
+        await query.edit_message_text("✅ Saving your selection...")
+        await asyncio.sleep(0.5)
+    except TelegramError as e:
+        logger.debug("Failed to edit message for chat_id %s: %s", unfollow_chat_id, str(e))
+
+    try:
+        await db.update_user(unfollow_chat_id, user)
+        await db.commit()
+        final_info_text_msg = "✅ Your selections have been updated."
+        if len(updated_subscriptions) > 0:
+            final_info_text_msg += updated_subscriptions_display_text
+        await query.edit_message_text(final_info_text_msg)
+    except Exception as e:
+        await db.rollback()
+        logger.error("Database error for chat_id %s: %s", unfollow_chat_id, str(e))
+        await query.edit_message_text("❌ An error occurred while updating your subscriptions. Please try again later.")
+
+    # Clear state data after completion
+    context.user_data.pop("curr_products_to_unfollow", None)
+    context.user_data.pop("original_products_followed_list", None)
+    context.user_data.pop("unfollow_message_id", None)
+    context.user_data.pop("unfollow_chat_id", None)
+
+    return ConversationHandler.END # End the conversation
+
+
+async def cancel_unfollow_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer("Cancelling...")
+    
+    await query.edit_message_text("❌ Unfollow operation cancelled. Your subscriptions remain unchanged. Have a look at your settings using /my_settings")
+
+    # Clear state data
+    context.user_data.pop("curr_products_to_unfollow", None)
+    context.user_data.pop("original_products_followed_list", None)
+    context.user_data.pop("unfollow_message_id", None)
+    context.user_data.pop("unfollow_chat_id", None)
+
+    return ConversationHandler.END # End the conversation
+
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcasts a message to all users or specific groups (Admin only)."""
@@ -1505,6 +1721,23 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast))  # Add broadcast command handler
     app.add_handler(CommandHandler("bot_stats", bot_stats))
     app.add_handler(CommandHandler("my_settings", status))
+
+    unfollow_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("unfollow", unfollow_command)],
+        states={
+            AWAITING_UNFOLLOW_SELECTION: [
+                CallbackQueryHandler(unfollow_callback_handler, pattern=f"^{UNFOLLOW_TOGGLE_PREFIX}.+"),
+                CallbackQueryHandler(confirm_unfollow_handler, pattern=f"^{UNFOLLOW_CONFIRM}$"),
+                CallbackQueryHandler(cancel_unfollow_handler, pattern=f"^{UNFOLLOW_CANCEL}$")
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_unfollow_handler), # Allows user to type /cancel at any point
+        ]
+    )
+    
+    # Register /unfollow command handler to unsubscribe from product notification
+    app.add_handler(unfollow_conv_handler)
 
     asyncio.run(run_polling(app))
 

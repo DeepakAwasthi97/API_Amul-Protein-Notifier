@@ -1,8 +1,9 @@
 # Amul Protein Notifier
 
-A modular, production-ready Telegram bot that checks Amul protein product availability and notifies users. 
+A modular, production-ready Telegram bot that checks Amul protein product availability and notifies users.
 
 ## Features
+
 - Checks product availability via Amul's API (no Selenium required)
 - Notifies users on Telegram when products are in stock
 - Caching and retry logic for reliability
@@ -10,6 +11,7 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 - Modular codebase for easy maintenance
 
 ## Main Files
+
 - `check_products.py` — Entrypoint script
 - `product_checker.py` — Main orchestration logic
 - `api_client.py` — API/session logic
@@ -20,23 +22,38 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 - `config.py` — All configuration (API, logging, cache, etc.)
 
 ## Requirements
+
 - Python 3.8+
-- Telegram Bot Token (set in `.env`)
+- Generate a Telegram Bot TOKEN for a dummy bot of your own using the @BotFather official bot on telegram and store it in .env
 
 ## Setup
+
 1. Clone the repo
-2. Create a `.env` file with your Telegram bot token and any secrets
+2. Create a `.env` file with your Telegram bot token and other secrets, 
+   primarily the keys required will be TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-4. Run the main script:
+   ```bash
+   pip install aiosqlite
+   ```
+4. Consider downloading and installing DB Browser
+5. Run the main script:
    ```bash
    python check_products.py
    ```
 
+## You may need to run the below command, subjective to any warnings you get in the console
+
+```bash
+pip install "python-telegram-bot[job-queue]"
+```
+
 ## Excluded from Public Repo
+
 - `users.json`, `users.db`, `substore_list.py`, `.env`, logs, and backup/debug files are excluded for privacy and security.
 
 ## License
+
 Amul Paglu

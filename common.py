@@ -114,6 +114,54 @@ PRODUCT_ALIAS_MAP = {
     "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets": "amul-chocolate-whey-protein-34-g-or-pack-of-60-sachets",
 }
 
+TEMP_PRDCT_TO_ID_MAP = {
+    "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30": "akpmc30",
+    "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8": "akpmac8",
+    "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30": "akpmac30",
+    "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 8": "akpmk8",
+    "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 30": "akpmk30",
+    "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 8": "akpmv8",
+    "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 30": "akpmv30",
+    "Amul High Protein Blueberry Shake, 200 mL | Pack of 30": "ahpbbs30",
+    "Amul High Protein Plain Lassi, 200 mL | Pack of 30": "ahppl30",
+    "Amul High Protein Rose Lassi, 200 mL | Pack of 30": "ahprl30",
+    "Amul High Protein Buttermilk, 200 mL | Pack of 30": "ahpbm20030",
+    "Amul High Protein Milk, 250 mL | Pack of 8": "ahpm2508",
+    "Amul High Protein Milk, 250 mL | Pack of 32": "ahpm32",
+    "Amul High Protein Paneer, 400 g | Pack of 24": "ahppr40024",
+    "Amul High Protein Paneer, 400 g | Pack of 2": "ahppr4002",
+    "Amul Whey Protein Gift Pack, 32 g | Pack of 10 sachets": "awpgp10",
+    "Amul Whey Protein, 32 g | Pack of 30 Sachets": "awp30",
+    "Amul Whey Protein Pack, 32 g | Pack of 60 Sachets": "awp60",
+    "Amul Chocolate Whey Protein Gift Pack, 34 g | Pack of 10 sachets": "acwpgp10",
+    "Amul Chocolate Whey Protein, 34 g | Pack of 30 sachets": "acwp30",
+    "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets": "acwp60"
+}
+
+TEMP_ID_TO_PRDCT_MAP = {
+    "akpmc30": "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30",
+    "akpmac8": "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8",
+    "akpmac30": "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30",
+    "akpmk8": "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 8",
+    "akpmk30": "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 30",
+    "akpmv8": "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 8",
+    "akpmv30": "Amul Kool Protein Milkshake | Vanilla, 180 mL | Pack of 30",
+    "ahpbbs30": "Amul High Protein Blueberry Shake, 200 mL | Pack of 30",
+    "ahppl30": "Amul High Protein Plain Lassi, 200 mL | Pack of 30",
+    "ahprl30": "Amul High Protein Rose Lassi, 200 mL | Pack of 30",
+    "ahpbm20030": "Amul High Protein Buttermilk, 200 mL | Pack of 30",
+    "ahpm2508": "Amul High Protein Milk, 250 mL | Pack of 8",
+    "ahpm32": "Amul High Protein Milk, 250 mL | Pack of 32",
+    "ahppr40024": "Amul High Protein Paneer, 400 g | Pack of 24",
+    "ahppr4002": "Amul High Protein Paneer, 400 g | Pack of 2",
+    "awpgp10": "Amul Whey Protein Gift Pack, 32 g | Pack of 10 sachets",
+    "awp30": "Amul Whey Protein, 32 g | Pack of 30 Sachets",
+    "awp60": "Amul Whey Protein Pack, 32 g | Pack of 60 Sachets",
+    "acwpgp10": "Amul Chocolate Whey Protein Gift Pack, 34 g | Pack of 10 sachets",
+    "acwp30": "Amul Chocolate Whey Protein, 34 g | Pack of 30 sachets",
+    "acwp60": "Amul Chocolate Whey Protein, 34 g | Pack of 60 sachets",
+}
+
 SHORT_TO_FULL = {v: k for k, v in PRODUCT_NAME_MAP.items()}
 
 # Logging setup
