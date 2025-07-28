@@ -1236,10 +1236,19 @@ async def confirm_unfollow_handler(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop("unfollow_message_id", None)
         context.user_data.pop("unfollow_chat_id", None)
         return ConversationHandler.END
+    
+    if len(curr_products_to_unfollow_list) == len(original_products_list):
+        await query.edit_message_text("Save time by using /stop to turn off all notifications, or atleast keep one product to be notified for.")
+        # Clear state data
+        context.user_data.pop("curr_products_to_unfollow", None)
+        context.user_data.pop("original_products_followed_list", None)
+        context.user_data.pop("unfollow_message_id", None)
+        context.user_data.pop("unfollow_chat_id", None)
+        return ConversationHandler.END
 
     # Filter out the selected products from the user's current subscriptions
     updated_subscriptions = []
-    updated_subscriptions_display_text ="\n You will be notified for: \n"
+    updated_subscriptions_display_text ="\n You will now be notified for: \n"
     print(f'original_products_list : {original_products_list}, curr_products_to_unfollow_list: {curr_products_to_unfollow_list}')
 
     for product in original_products_list:

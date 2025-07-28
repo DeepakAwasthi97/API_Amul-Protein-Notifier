@@ -40,6 +40,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
                     for name, _, quantity in relevant_products:
                         short_name = PRODUCT_NAME_MAP.get(name, name)
                         message += f"- {short_name} \n(Quantity Left: {quantity})\n"
+                    message += '\n In order to stop receiving notifications for any of the above products click /unfollow command.'
                     logger.info(f"Sending specific notification to chat_id {chat_id}: {len(relevant_products)} products")
                     await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
                 else:
