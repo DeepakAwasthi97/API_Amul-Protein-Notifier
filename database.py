@@ -189,25 +189,27 @@ class Database:
 
     async def record_state_change(self, state_alias, product_name, status, inventory_quantity):
         try:
+            # Fetch previous state before updating
+            last_state = await self.get_last_state_change(state_alias, product_name)
             # Update current status
             await self._connection.execute("""
                 INSERT OR REPLACE INTO state_product_status 
                 (state_alias, product_name, status, inventory_quantity, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
-            
-            # Check if status changed and log to history
-            last_state = await self.get_last_state_change(state_alias, product_name)
+            # Log to history if no previous state or status changed
             if not last_state or last_state["status"] != status:
                 await self._connection.execute("""
                     INSERT INTO state_product_history 
                     (state_alias, product_name, status, inventory_quantity, timestamp)
                     VALUES (?, ?, ?, ?, ?)
                 """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
-                logging.info(f"State transition recorded: {state_alias} - {product_name} - {status}")
+                logging.info(f"State transition recorded: {state_alias} - {product_name} - {status} (previous: {last_state['status'] if last_state else None})")
+            else:
+                logging.debug(f"No state transition for {state_alias} - {product_name}: current {status}, previous {last_state['status']}")
             await self.commit()
         except aiosqlite.Error as e:
-            logging.error(f"Error recording state change: {e}")
+            logging.error(f"Error recording state change for {state_alias} - {product_name}: {e}")
 
     async def get_last_state_change(self, state_alias, product_name):
         try:
@@ -221,7 +223,7 @@ class Database:
                     return {"status": row[0], "inventory_quantity": row[1], "timestamp": row[2]}
                 return None
         except aiosqlite.Error as e:
-            logging.error(f"Error getting last state change: {e}")
+            logging.error(f"Error getting last state change for {state_alias} - {product_name}: {e}")
             return None
 
     async def commit(self):
@@ -255,7 +257,7 @@ class Database:
                 rows = await cursor.fetchall()
                 return [{"status": row[0], "timestamp": row[1]} for row in rows]
         except aiosqlite.Error as e:
-            logging.error(f"Error getting state changes: {e}")
+            logging.error(f"Error getting state changes for {state_alias} - {product_name}: {e}")
             return []
 
     async def get_last_sold_out_before(self, state_alias, product_name, before_time):

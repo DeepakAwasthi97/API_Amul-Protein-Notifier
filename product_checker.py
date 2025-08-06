@@ -111,37 +111,42 @@ async def should_notify_user(user, product_name, current_status, state_alias, db
     notification_preference = user.get("notification_preference", "until_stop")
     last_notified = user.get("last_notified", {})
     if current_status != "In Stock":
+        logger.debug(f"Not notifying for {product_name} (chat_id: {chat_id}): not In Stock")
         return False
     if notification_preference == "until_stop":
+        logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): until_stop preference")
         return True
     elif notification_preference == "once_and_stop":
         if product_name in last_notified:
+            logger.debug(f"Not notifying for {product_name} (chat_id: {chat_id}): already notified")
             return False
+        logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): once_and_stop, first time")
         return True
     elif notification_preference == "once_per_restock":
         last_notification_time = last_notified.get(product_name)
         if not last_notification_time:
-            logger.info(f"No last notification for {product_name}, notifying for chat_id {chat_id}")
+            logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): no prior notification")
             return True
         last_state = await db.get_last_state_change(state_alias, product_name)
         if not last_state:
-            logger.info(f"No state history for {product_name} in {state_alias}, assuming first restock")
+            logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): no state history, assuming first restock")
             return True
         try:
             last_notified_time = datetime.fromisoformat(last_notification_time)
             last_state_time = datetime.fromisoformat(last_state["timestamp"])
             previous_states = await db.get_state_changes_since(state_alias, product_name, last_notified_time)
             if any(state['status'] == 'Sold Out' for state in previous_states):
-                logger.info(f"Restock detected for {product_name} in {state_alias}")
+                logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): restock detected")
                 return True
             if last_state["status"] == "Sold Out" and last_state_time > last_notified_time:
-                logger.info(f"Fallback restock detected for {product_name} in {state_alias}")
+                logger.info(f"Notifying for {product_name} (chat_id: {chat_id}): fallback restock detected")
                 return True
-            logger.debug(f"No restock for {product_name} in {state_alias}: still In Stock since {last_notified_time}")
+            logger.debug(f"Not notifying for {product_name} (chat_id: {chat_id}): no restock, still In Stock")
             return False
         except Exception as e:
             logger.error(f"Error checking restock status for chat_id {chat_id}: {e}")
             return False
+    logger.debug(f"Not notifying for {product_name} (chat_id: {chat_id}): unknown preference")
     return False
 
 async def update_user_notification_tracking(user, product_name, db):
