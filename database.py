@@ -20,6 +20,7 @@ class Database:
             logging.error(f"Error initializing database: {e}")
             raise
 
+    # In database.py, update create_tables
     async def create_tables(self):
         try:
             await self._connection.execute("""
@@ -38,26 +39,78 @@ class Database:
                     PRIMARY KEY (state_alias, product_name)
                 )
             """)
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS state_product_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    state_alias TEXT,
+                    product_name TEXT,
+                    status TEXT,
+                    inventory_quantity INTEGER,
+                    timestamp TEXT
+                )
+            """)
+            await self._connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_state_product_history 
+                ON state_product_history (state_alias, product_name, timestamp)
+            """)
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS cleanup_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    last_cleanup_timestamp TEXT
+                )
+            """)
             await self.commit()
         except aiosqlite.Error as e:
             logging.error(f"Error creating tables: {e}")
 
-    # async def migrate_tables(self):
-    #     try:
-    #         async with self._connection.execute("PRAGMA table_info(state_product_history)") as cursor:
-    #             columns = [row[1] for row in await cursor.fetchall()]
-    #             if "inventory_quantity" in columns or "unique" in [row[5].lower() for row in await cursor.fetchall()]:
-    #                 # Migrate old state_product_history to state_product_status
-    #                 await self._connection.execute("""
-    #                     INSERT OR REPLACE INTO state_product_status (state_alias, product_name, status, inventory_quantity, timestamp)
-    #                     SELECT state_alias, product_name, status, inventory_quantity, timestamp
-    #                     FROM state_product_history
-    #                 """)
-    #                 await self._connection.execute("DROP TABLE IF EXISTS state_product_history")
-    #                 await self.create_tables()
-    #                 logging.info("Migrated state_product_history to new schema")
-    #     except aiosqlite.Error as e:
-    #         logging.error(f"Error migrating tables: {e}")
+    async def get_last_cleanup_time(self):
+        """Retrieve the timestamp of the last cleanup."""
+        try:
+            async with self._connection.execute("""
+                SELECT last_cleanup_timestamp FROM cleanup_history
+                ORDER BY last_cleanup_timestamp DESC LIMIT 1
+            """) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    return datetime.fromisoformat(row[0])
+                return None
+        except aiosqlite.Error as e:
+            logging.error(f"Error getting last cleanup time: {e}")
+            return None
+
+    async def record_cleanup_time(self):
+        """Record the current timestamp as the last cleanup time."""
+        try:
+            await self._connection.execute("""
+                INSERT INTO cleanup_history (last_cleanup_timestamp)
+                VALUES (?)
+            """, (datetime.now().isoformat(),))
+            await self.commit()
+            logging.debug("Recorded cleanup timestamp")
+        except aiosqlite.Error as e:
+            logging.error(f"Error recording cleanup time: {e}")
+
+    async def cleanup_state_history(self, days=2):
+        """Clean up state_product_history older than specified days, if 2 days have passed since last cleanup."""
+        try:
+            last_cleanup = await self.get_last_cleanup_time()
+            now = datetime.now()
+            if last_cleanup and (now - last_cleanup) < timedelta(days=days):
+                logging.debug("Skipping cleanup: less than 2 days since last cleanup")
+                return False
+
+            cutoff = (now - timedelta(days=days)).isoformat()
+            await self._connection.execute(
+                "DELETE FROM state_product_history WHERE timestamp < ?",
+                (cutoff,)
+            )
+            await self.record_cleanup_time()
+            await self.commit()
+            logging.info(f"Cleaned up state_product_history older than {days} days")
+            return True
+        except aiosqlite.Error as e:
+            logging.error(f"Error cleaning up state history: {e}")
+            return False
 
     async def add_user(self, chat_id, user_data):
         """Add or update a user in the database."""
@@ -136,16 +189,21 @@ class Database:
 
     async def record_state_change(self, state_alias, product_name, status, inventory_quantity):
         try:
+            # Update current status
             await self._connection.execute("""
-                INSERT OR REPLACE INTO state_product_status (state_alias, product_name, status, inventory_quantity, timestamp)
+                INSERT OR REPLACE INTO state_product_status 
+                (state_alias, product_name, status, inventory_quantity, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
+            
+            # Check if status changed and log to history
             last_state = await self.get_last_state_change(state_alias, product_name)
             if not last_state or last_state["status"] != status:
                 await self._connection.execute("""
-                    INSERT INTO state_product_status (state_alias, product_name, status, timestamp)
-                    VALUES (?, ?, ?, ?)
-                """, (state_alias, product_name, status, datetime.now().isoformat()))
+                    INSERT INTO state_product_history 
+                    (state_alias, product_name, status, inventory_quantity, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
                 logging.info(f"State transition recorded: {state_alias} - {product_name} - {status}")
             await self.commit()
         except aiosqlite.Error as e:
@@ -190,7 +248,7 @@ class Database:
     async def get_state_changes_since(self, state_alias, product_name, since_time):
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp FROM state_product_status
+                SELECT status, timestamp FROM state_product_history
                 WHERE state_alias = ? AND product_name = ? AND timestamp > ?
                 ORDER BY timestamp ASC
             """, (state_alias, product_name, since_time)) as cursor:
@@ -201,10 +259,9 @@ class Database:
             return []
 
     async def get_last_sold_out_before(self, state_alias, product_name, before_time):
-        """Get the last 'Sold Out' state before a specific time."""
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp FROM state_product_status 
+                SELECT status, timestamp FROM state_product_history 
                 WHERE state_alias = ? AND product_name = ? AND status = 'Sold Out' AND timestamp < ?
                 ORDER BY timestamp DESC LIMIT 1
             """, (state_alias, product_name, before_time)) as cursor:
@@ -215,12 +272,3 @@ class Database:
         except aiosqlite.Error as e:
             logging.error(f"Error getting last sold out state: {e}")
             return None
-    
-    async def cleanup_state_history(self, days=30):
-        try:
-            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-            await self._connection.execute("DELETE FROM state_product_status WHERE timestamp < ?", (cutoff,))
-            await self.commit()
-            logging.info(f"Cleaned up state_product_status older than {days} days")
-        except aiosqlite.Error as e:
-            logging.error(f"Error cleaning up state history: {e}")

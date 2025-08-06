@@ -156,7 +156,6 @@ async def update_user_notification_tracking(user, product_name, db):
 
 async def check_products_for_users():
     """Check products for all users and send notifications."""
-
     db = Database(DATABASE_FILE)
     logger.info(f"Database object type: {type(db)}, methods: {dir(db)}")
     await db._init_db()
@@ -170,10 +169,7 @@ async def check_products_for_users():
 
         logger.info(f"Found {len(active_users)} active users")
 
-        # Restored: Load dynamic substore mapping
         substore_info = load_substore_mapping()
-
-        # Group users by state_alias (preserved, but add dynamic handling)
         state_groups = {}
         pincode_to_state = {}
         for state_data in substore_info:
@@ -184,7 +180,6 @@ async def check_products_for_users():
                     pincode = pincode.strip()
                     if pincode:
                         pincode_to_state[pincode] = state_alias
-        # Handle users with unmapped pincodes dynamically
         unmapped_users = []
         for user in active_users:
             pincode = str(user.get('pincode', ''))
@@ -192,7 +187,6 @@ async def check_products_for_users():
             if state_alias:
                 state_groups.setdefault(state_alias, []).append(user)
             else:
-                # Dynamic fetch and update
                 logger.warning(f"No state found for pincode {pincode}. Fetching dynamically...")
                 try:
                     sync_session = cloudscraper.create_scraper()
@@ -200,7 +194,6 @@ async def check_products_for_users():
                     fetched_alias = substore.get("alias", f"unknown-{pincode}")
                     existing_entry = next((entry for entry in substore_info if entry.get("alias") == fetched_alias), None)
                     if existing_entry:
-                        # Append to existing entry
                         if existing_entry["pincodes"]:
                             existing_entry["pincodes"] += f",{pincode}"
                         else:
@@ -212,7 +205,6 @@ async def check_products_for_users():
                         state_alias = fetched_alias
                         logger.info(f"Appended pincode {pincode} and substore_id {substore_id} to existing state {state_alias}")
                     else:
-                        # Create new entry if alias doesn't exist
                         new_entry = {
                             "_id": substore_id,
                             "name": substore.get("name", f"Unknown-{pincode}"),
@@ -222,9 +214,7 @@ async def check_products_for_users():
                         substore_info.append(new_entry)
                         state_alias = new_entry["alias"]
                         logger.info(f"Created new entry for state {state_alias} with pincode {pincode}")
-                    # Persist changes
                     save_substore_mapping(substore_info)
-                    # Update in-memory
                     pincode_to_state[pincode] = state_alias
                     substore_pincode_map[pincode] = substore_id
                     state_groups.setdefault(state_alias, []).append(user)
@@ -247,10 +237,8 @@ async def check_products_for_users():
                 task = asyncio.create_task(check_product_availability_for_state(state_alias, sample_pincode, db))
                 state_tasks.append((state_alias, task))
 
-            # Gather results concurrently
             results = await asyncio.gather(*[task for _, task in state_tasks], return_exceptions=True)
 
-            # Check for task exceptions
             for state_alias, result in zip([state_alias for state_alias, _ in state_tasks], results):
                 if isinstance(result, Exception):
                     logger.error(f"Error processing state {state_alias}: {str(result)}")
@@ -261,9 +249,7 @@ async def check_products_for_users():
                     logger.warning(f"No product status for state {state_alias}")
                     continue
 
-                # Notify users in this state based on their preferences
                 notification_tasks = []
-
                 for user in state_groups[state_alias]:
                     chat_id = user.get("chat_id")
                     products_to_check = user.get("products", [])
@@ -275,9 +261,7 @@ async def check_products_for_users():
                     notify_products = []
                     all_product_names = [name for name, _, _ in product_status] if check_all_products else products_to_check
 
-                    # --- PATCH: Advanced handling for once_per_restock ---
                     if preference == "once_per_restock":
-                        # Step 1: Did any product restock? (per previous logic)
                         restocked_products = [
                             product_name
                             for product_name, status, inventory_quantity in product_status
@@ -285,24 +269,36 @@ async def check_products_for_users():
                                 and await should_notify_user(user, product_name, status, state_alias, db)
                         ]
                         if restocked_products:
-                            # Step 2: Notify for ALL currently in stock tracked products
                             notify_products = [
                                 (product_name, status, inventory_quantity)
                                 for product_name, status, inventory_quantity in product_status
                                 if status == "In Stock" and (check_all_products or product_name in all_product_names)
                             ]
-                            # Step 3: Update last_notified for ALL notified products
                             for product_name, _, _ in notify_products:
                                 await update_user_notification_tracking(user, product_name, db)
-                        # else: no notification, notify_products stays empty
-
+                        else:
+                            notify_products = []
                     else:
-                        # Standard per-product logic (until_stop, once_and_stop)
                         for product_name, status, inventory_quantity in product_status:
                             if check_all_products or product_name in all_product_names:
                                 if await should_notify_user(user, product_name, status, state_alias, db):
                                     notify_products.append((product_name, status, inventory_quantity))
                                     await update_user_notification_tracking(user, product_name, db)
+                                    if preference == "once_and_stop" and not check_all_products:
+                                        # Check if all tracked products have been notified
+                                        remaining_products = [
+                                            p for p in products_to_check
+                                            if p not in user.get("last_notified", {})
+                                        ]
+                                        if not remaining_products:
+                                            user["active"] = False
+                                            await db.update_user(chat_id, user)
+                                            await app.bot.send_message(
+                                                chat_id=chat_id,
+                                                text="You have been notified for all tracked products. Notifications are now stopped. Use /start to reactivate.",
+                                                parse_mode="Markdown"
+                                            )
+                                            logger.info(f"Deactivated user {chat_id} after once_and_stop notifications for all products")
 
                     if notify_products:
                         task = asyncio.create_task(
@@ -311,6 +307,15 @@ async def check_products_for_users():
                             )
                         )
                         notification_tasks.append(task)
+                        if preference == "once_and_stop" and check_all_products:
+                            user["active"] = False
+                            await db.update_user(chat_id, user)
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text="You have been notified about available products. Notifications are now stopped.\n\nUse /start to reactivate or use /setproducts to track specific products once again.",
+                                parse_mode="Markdown"
+                            )
+                            logger.info(f"Deactivated user {chat_id} after once_and_stop notification for 'any' products")
 
                 if notification_tasks:
                     await asyncio.gather(*notification_tasks, return_exceptions=True)
@@ -321,6 +326,7 @@ async def check_products_for_users():
             logger.info("Telegram application shutdown completed")
 
     finally:
+        await db.cleanup_state_history(days=2)
         await db.close()
         logger.info("Database connection closed")
         logger.info("Product check completed")

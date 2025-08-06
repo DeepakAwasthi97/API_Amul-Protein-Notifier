@@ -120,6 +120,7 @@ async def notification_preference_callback(update: Update, context: ContextTypes
         # Reset last_notified when changing preference
         if user.get("notification_preference") != new_preference:
             user["last_notified"] = {}
+            user["active"] = True
         
         user["notification_preference"] = new_preference
         await db.update_user(chat_id, user)
