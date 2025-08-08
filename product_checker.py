@@ -347,8 +347,10 @@ async def check_products_for_users():
                             )
                             
                             # Only update notification tracking after successful notification
-                            for product_name in products_notified:
-                                await update_user_notification_tracking(user, product_name, db)
+                            # Skip last_notified updates for 'until_stop' to avoid unnecessary DB writes
+                            if user.get("notification_preference") != "until_stop":
+                                for product_name in products_notified:
+                                    await update_user_notification_tracking(user, product_name, db)
                             
                             logger.info(f"Successfully notified user {chat_id} for products: {products_notified}")
                             
