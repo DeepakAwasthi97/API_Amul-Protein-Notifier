@@ -7,6 +7,8 @@ from github import Github
 from github.GithubException import GithubException
 from datetime import datetime
 from dotenv import load_dotenv
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Setup logging
 logging.basicConfig(

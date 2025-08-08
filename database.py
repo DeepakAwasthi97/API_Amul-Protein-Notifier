@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime, timedelta
+
 class Database:
     def __init__(self, db_file):
         self.db_file = db_file
@@ -14,13 +15,11 @@ class Database:
             self._connection = await aiosqlite.connect(self.db_file)
             await self._connection.execute("PRAGMA journal_mode=WAL")
             await self.create_tables()
-            # await self.migrate_tables()
             logging.info("Database initialized with WAL mode.")
         except aiosqlite.Error as e:
             logging.error(f"Error initializing database: {e}")
             raise
 
-    # In database.py, update create_tables
     async def create_tables(self):
         try:
             await self._connection.execute("""
@@ -29,6 +28,7 @@ class Database:
                     data TEXT
                 )
             """)
+
             await self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS state_product_status (
                     state_alias TEXT,
@@ -39,6 +39,7 @@ class Database:
                     PRIMARY KEY (state_alias, product_name)
                 )
             """)
+
             await self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS state_product_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,16 +50,19 @@ class Database:
                     timestamp TEXT
                 )
             """)
+
             await self._connection.execute("""
-                CREATE INDEX IF NOT EXISTS idx_state_product_history 
+                CREATE INDEX IF NOT EXISTS idx_state_product_history
                 ON state_product_history (state_alias, product_name, timestamp)
             """)
+
             await self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS cleanup_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     last_cleanup_timestamp TEXT
                 )
             """)
+
             await self.commit()
         except aiosqlite.Error as e:
             logging.error(f"Error creating tables: {e}")
@@ -95,6 +99,7 @@ class Database:
         try:
             last_cleanup = await self.get_last_cleanup_time()
             now = datetime.now()
+            
             if last_cleanup and (now - last_cleanup) < timedelta(days=days):
                 logging.debug("Skipping cleanup: less than 2 days since last cleanup")
                 return False
@@ -104,6 +109,7 @@ class Database:
                 "DELETE FROM state_product_history WHERE timestamp < ?",
                 (cutoff,)
             )
+            
             await self.record_cleanup_time()
             await self.commit()
             logging.info(f"Cleaned up state_product_history older than {days} days")
@@ -119,7 +125,7 @@ class Database:
             user_data["notification_preference"] = "until_stop"  # Default
         if "last_notified" not in user_data:
             user_data["last_notified"] = {}
-        
+
         for attempt in range(3):
             try:
                 await self._connection.execute(
@@ -188,28 +194,68 @@ class Database:
             return []
 
     async def record_state_change(self, state_alias, product_name, status, inventory_quantity):
+        """Record state change with proper transaction handling."""
         try:
-            # Fetch previous state before updating
-            last_state = await self.get_last_state_change(state_alias, product_name)
-            # Update current status
+            # Use a transaction to ensure consistency
+            await self._connection.execute("BEGIN")
+            
+            # Get current state within transaction
+            async with self._connection.execute("""
+                SELECT status, inventory_quantity, timestamp
+                FROM state_product_status
+                WHERE state_alias = ? AND product_name = ?
+            """, (state_alias, product_name)) as cursor:
+                current_row = await cursor.fetchone()
+                
+            previous_state = None
+            if current_row:
+                previous_state = {
+                    "status": current_row[0], 
+                    "inventory_quantity": current_row[1], 
+                    "timestamp": current_row[2]
+                }
+
+            # Always update current status
             await self._connection.execute("""
-                INSERT OR REPLACE INTO state_product_status 
+                INSERT OR REPLACE INTO state_product_status
                 (state_alias, product_name, status, inventory_quantity, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
-            # Log to history if no previous state or status changed
-            if not last_state or last_state["status"] != status:
+
+            # Log to history if status changed or no previous state
+            if not previous_state or previous_state["status"] != status:
                 await self._connection.execute("""
-                    INSERT INTO state_product_history 
+                    INSERT INTO state_product_history
                     (state_alias, product_name, status, inventory_quantity, timestamp)
                     VALUES (?, ?, ?, ?, ?)
                 """, (state_alias, product_name, status, inventory_quantity, datetime.now().isoformat()))
-                logging.info(f"State transition recorded: {state_alias} - {product_name} - {status} (previous: {last_state['status'] if last_state else None})")
+                
+                logging.info(f"State transition recorded: {state_alias} - {product_name} - {status} (previous: {previous_state['status'] if previous_state else 'None'})")
             else:
-                logging.debug(f"No state transition for {state_alias} - {product_name}: current {status}, previous {last_state['status']}")
-            await self.commit()
-        except aiosqlite.Error as e:
+                logging.debug(f"No state transition for {state_alias} - {product_name}: status unchanged ({status})")
+
+            await self._connection.commit()
+            return previous_state  # Return previous state for restock detection
+            
+        except Exception as e:
+            await self._connection.rollback()
             logging.error(f"Error recording state change for {state_alias} - {product_name}: {e}")
+            raise
+
+    async def is_restock_event(self, state_alias, product_name, current_status, previous_state):
+        """Check if current state change represents a restock event."""
+        if current_status != "In Stock":
+            return False
+            
+        if not previous_state:
+            # First time seeing this product - consider it a restock
+            return True
+            
+        if previous_state["status"] == "Sold Out":
+            # Direct transition from Sold Out to In Stock
+            return True
+            
+        return False
 
     async def get_last_state_change(self, state_alias, product_name):
         try:
@@ -263,7 +309,7 @@ class Database:
     async def get_last_sold_out_before(self, state_alias, product_name, before_time):
         try:
             async with self._connection.execute("""
-                SELECT status, timestamp FROM state_product_history 
+                SELECT status, timestamp FROM state_product_history
                 WHERE state_alias = ? AND product_name = ? AND status = 'Sold Out' AND timestamp < ?
                 ORDER BY timestamp DESC LIMIT 1
             """, (state_alias, product_name, before_time)) as cursor:

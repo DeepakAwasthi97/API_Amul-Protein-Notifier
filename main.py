@@ -667,8 +667,8 @@ async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         context.user_data.pop(key, None)
 
     user = await db.get_user(chat_id)
-    if not user:
-        await update.message.reply_text("*⚠️ You need to register first*. Use /setpincode to begin.", parse_mode="Markdown")
+    if not user or not user.get("active", False):
+        await update.message.reply_text("*⚠️ Action Required:* You need to register or reactivate your account.\n\nTo get started, use the /start command or enter your PIN with /setpincode .", parse_mode="Markdown")
         return
 
     context.user_data["selected_products"] = set()
@@ -702,16 +702,17 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Validate chat_id against the update context
     if chat_id != update.effective_chat.id:
         logger.warning("Chat_id mismatch: query=%s, update=%s. Ending conversation.", chat_id, update.effective_chat.id)
-        await query.answer("Session expired. Use /setproducts to restart.")
+        await query.answer("Session expired. Use /setproducts to restart.", show_alert=True)
         return ConversationHandler.END
 
     # Check if user is active
     user = await db.get_user(chat_id)
     if not user or not user.get("active", False):
         logger.warning("Inactive or non-existent user for chat_id %s", chat_id)
-        await query.answer("User inactive or not found. Use /start to reactivate.")
+        await query.message.reply_text("User inactive or not found. Use /start to reactivate.")
+        await query.answer("User inactive or not found. Use /start to reactivate.",show_alert=True)
         return ConversationHandler.END
-
+    
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         # Ensure selected_products is initialized
@@ -1165,7 +1166,7 @@ async def unfollow_callback_handler(update: Update, context: ContextTypes.DEFAUL
     user = await db.get_user(chat_id)
     if not user or not user.get("active", False):
         logger.warning("Inactive or non-existent user for chat_id %s", chat_id)
-        await query.answer("User inactive or not found. Use /start to reactivate.")
+        await query.answer("User inactive or not found. Use /start to reactivate.", show_alert=True)
         return ConversationHandler.END
 
     if curr_products_to_unfollow_set is None or original_products_list is None:
