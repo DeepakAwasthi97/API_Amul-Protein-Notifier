@@ -8,6 +8,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def send_telegram_notification_for_user(app, chat_id, pincode, products_to_check, notify_products, max_retries=3):
+    logger.info(f"Attempting to send notification to chat_id {chat_id} for pincode {pincode}")
+    logger.debug(f"Products to check: {products_to_check}")
+    logger.debug(f"Notify products: {notify_products}")
     
     if not notify_products:
         logger.info(f"No products to notify for chat_id {chat_id}")
@@ -39,6 +42,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
         try:
             async with asyncio.timeout(10):  # 10 second timeout per attempt
                 await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                logger.info(f"Successfully sent notification to chat_id {chat_id}")
                 return True  # Successfully sent
         except asyncio.TimeoutError:
             if attempt < max_retries - 1:

@@ -23,8 +23,11 @@ user_locks = {}  # chat_id -> asyncio.Lock
 
 async def should_notify_user(user, product_name, status, state_alias, db, is_restock):
     """Determine if a notification should be sent based on user preference."""
+    chat_id = user.get('chat_id', 'unknown')
+    logger.info(f"Checking notification criteria for user {chat_id}, product '{product_name}', status '{status}'")
+    
     if not isinstance(user, dict):
-        logger.error(f"Invalid user data type for chat_id {user.get('chat_id', 'unknown')}: {type(user)}")
+        logger.error(f"Invalid user data type for chat_id {chat_id}: {type(user)}")
         return False
 
     # Don't notify if product is not in stock
@@ -309,11 +312,13 @@ async def check_products_for_users(db):
                     ]
                     products_notified = [name for name, _, _ in notify_products]
                     if notify_products:
+                        logger.info(f"Preparing to notify user {chat_id} about products: {products_notified}")
                         if chat_id not in user_locks:
                             user_locks[chat_id] = asyncio.Lock()
                         async def locked_send():
                             async with user_locks[chat_id]:
                                 async with notification_semaphore:
+                                    logger.info(f"Starting notification process for user {chat_id}")
                                     success = await send_telegram_notification_for_user(
                                         app, 
                                         chat_id, 
