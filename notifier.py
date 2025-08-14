@@ -38,7 +38,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(10):  # 10 second timeout per attempt
-                # await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
                 return True  # Successfully sent
         except asyncio.TimeoutError:
             if attempt < max_retries - 1:

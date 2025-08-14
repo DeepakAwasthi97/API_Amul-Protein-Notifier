@@ -30,7 +30,8 @@ async def migrate_data():
         pg_pool = await asyncpg.create_pool(
             DATABASE_URL,
             min_size=5,
-            max_size=20
+            max_size=20,
+            server_settings={"search_path":"public"}
         )
 
         async with pg_pool.acquire() as pg_conn:
@@ -48,8 +49,10 @@ async def migrate_data():
                     logger.info("Users table does not exist. Creating...")
 
                 # Create users table
+                role_info = await pg_conn.fetchrow("SELECT current_user, session_user;")
+                logger.info(f"PostgreSQL current_user: {role_info['current_user']}, session_user: {role_info['session_user']}")
                 await pg_conn.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
+                    CREATE TABLE IF NOT EXISTS public.users (
                         chat_id BIGINT PRIMARY KEY,
                         data JSONB NOT NULL
                     )
