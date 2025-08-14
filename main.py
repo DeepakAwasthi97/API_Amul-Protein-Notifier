@@ -19,17 +19,30 @@ from datetime import datetime, timedelta
 from collections import Counter
 import time
 import logging
+import sys
 
 # Local imports
 import common
 import config
 from database import Database
+from config import DATABASE_URL
 
 logger = common.setup_logging()
 logger.setLevel(logging.DEBUG)
 
+# Check for required environment variables
+if not DATABASE_URL:
+    logger.error("DATABASE_URL environment variable is not set!")
+    sys.exit(1)
+
 # Initialize database
 db = None
+
+async def init_database():
+    """Initialize the database connection pool"""
+    global db
+    db = Database(DATABASE_URL)
+    await db._init_db()
 
 # Conversation states
 AWAITING_PINCODE, AWAITING_SUPPORT_MESSAGE, AWAITING_PRODUCT_SELECTION, AWAITING_UNFOLLOW_SELECTION, AWAITING_ADMIN_REPLY, AWAITING_NOTIFICATION_PREFERENCE = range(6)
@@ -117,14 +130,15 @@ async def notification_preference_callback(update: Update, context: ContextTypes
         return
 
     try:
-        # Reset last_notified when changing preference
-        if user.get("notification_preference") != new_preference:
-            user["last_notified"] = {}
-            user["active"] = True
-        
+        # Always reset last_notified and update preference together
         user["notification_preference"] = new_preference
-        await db.update_user(chat_id, user)
-        await db.commit()
+        user["last_notified"] = {}  # Reset notifications when preference changes
+        user["active"] = True
+        
+        success = await db.update_user(chat_id, user)
+        if not success:
+            await query.edit_message_text("⚠️ Failed to update notification preference. Please try again.")
+            return
 
         preference_names = {
             "once_and_stop": "🔔 Notify once and stop",
@@ -138,7 +152,6 @@ async def notification_preference_callback(update: Update, context: ContextTypes
         logger.info(f"Updated notification preference for chat_id {chat_id} to {new_preference}")
 
     except Exception as e:
-        await db.rollback()
         logger.error(f"Error updating notification preference for chat_id {chat_id}: {str(e)}")
         await query.edit_message_text("⚠️ Failed to update notification preference. Please try again.")
 
@@ -162,21 +175,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             user["active"] = True
-            await db.update_user(chat_id, user)
-            await db.commit()
-
+            user["last_notified"] = {}  # Reset notifications when reactivating
             message = await update.message.reply_text("⏳ Re-enabling notifications...")
-            await asyncio.sleep(0.5)
+            
+            if await db.update_user(chat_id, user):
+                await asyncio.sleep(0.5)
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                except TelegramError as e:
+                    logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
 
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-            except TelegramError as e:
-                logger.debug("Failed to delete transitional message for chat_id %s: %s", chat_id, str(e))
-
-            message_text = (
-                f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
-                "Use /stop to pause them again."
-            )
+                message_text = (
+                    f"🎉 Welcome back! Notifications have been re-enabled for PINCODE {pincode} 📍.\n"
+                    "Use /stop to pause them again."
+                )
+            else:
+                message_text = "⚠️ Failed to re-enable notifications. Please try again."
     else:
         message_text = (
             "👋 Welcome to the Amul Protein Items Notifier Bot! 🧀\n\n"
@@ -197,22 +211,24 @@ async def _save_pincode(chat_id: int, pincode: str, context: ContextTypes.DEFAUL
     """Helper function to save the pincode for a user using database only."""
     try:
         user = await db.get_user(chat_id)
+        success = False
         if user:
             user["pincode"] = pincode
             user["active"] = True
             user["last_notified"] = {}
-            await db.update_user(chat_id, user)
+            success = await db.update_user(chat_id, user)
         else:
-            new_user = {"chat_id": str(chat_id), 
-                        "pincode": pincode, 
-                        "products": ["Any"], 
-                        "active": True,
-                        "last_notified" : {}}
-            await db.add_user(chat_id, new_user)
-        await db.commit()
-        return True
+            new_user = {
+                "chat_id": str(chat_id), 
+                "pincode": pincode, 
+                "products": ["Any"], 
+                "active": True,
+                "last_notified": {},
+                "notification_preference": "until_stop"  # Default preference
+            }
+            success = await db.update_user(chat_id, new_user)  # update_user handles both insert and update
+        return success
     except Exception as e:
-        await db.rollback()
         logger.error(f"Error saving pincode for chat_id {chat_id}: {str(e)}")
         return False
 
@@ -380,6 +396,7 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     # Prepare user info for admin
     user_info = f"Chat ID: {chat_id}\n"
     user_info += f"Pincode: {user.get('pincode', 'Not set')}\n"
+    user_info += f"Active status: {user.get('active')}\n"
     products = user.get("products", ["Any"]) if user else ["Any"]
     product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
     user_info += f"Tracked Products:\n{product_message}\n"
@@ -654,6 +671,44 @@ async def cleanup_support_requests(context: ContextTypes.DEFAULT_TYPE):
 
     logger.debug("Cleaned up %d expired support requests", len(expired))
 
+async def _save_products(chat_id: int, products: list) -> bool:
+    """Helper function to save product preferences."""
+    try:
+        user = await db.get_user(chat_id)
+        if user:
+            # Convert products to a proper list if it's not already
+            products_list = list(products) if isinstance(products, (list, set)) else [products]
+            
+            # Get current products
+            current_products = user.get("products", ["Any"])
+            if isinstance(current_products, str):
+                try:
+                    current_products = json.loads(current_products)
+                except json.JSONDecodeError:
+                    current_products = ["Any"]
+                    
+            # Check if products have changed
+            if set(products_list) != set(current_products):
+                # Products changed, reset last_notified
+                user["products"] = products_list
+                user["last_notified"] = {}  # Reset notifications when products change
+                user["active"] = True  # Ensure user is active
+                logger.info(f"Products changed for user {chat_id}, resetting notifications. Old: {current_products}, New: {products_list}")
+            else:
+                # Products unchanged, just update the list format
+                user["products"] = products_list
+                
+            success = await db.update_user(chat_id, user)
+            if success:
+                logger.info(f"Updated products for user {chat_id}: {products_list}")
+            return success
+        else:
+            logger.error(f"No user found for chat_id {chat_id}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving products for chat_id {chat_id}: {e}")
+        return False
+
 async def set_products(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the product selection conversation, clearing previous state."""
     chat_id = update.effective_chat.id
@@ -819,26 +874,21 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         elif action == "products_confirm_Any":
             final_selection = ["Any"]
-            # FIX: Fetch from DB, not cached_user!
-            user = await db.get_user(chat_id)
-            if not user:
-                user = {"chat_id": chat_id}
-            user["products"] = final_selection
-            user["active"] = True
-            user["last_notified"] = {}
             try:
                 await query.edit_message_text("✅ Saving your selection...")
                 await asyncio.sleep(0.5)
             except TelegramError as e:
                 logger.debug("Failed to edit message for chat_id %s: %s", chat_id, str(e))
+            
             try:
-                await db.update_user(chat_id, user)
-                await db.commit()
-                await query.edit_message_text(
-                    "✅ Your selection has been saved. \nYou will be notified if any of the Amul Protein product is available❗."
-                )
+                success = await _save_products(chat_id, final_selection)
+                if success:
+                    await query.edit_message_text(
+                        "✅ Your selection has been saved. \nYou will be notified if any of the Amul Protein product is available❗."
+                    )
+                else:
+                    await query.edit_message_text("❌ Sorry, there was a problem saving your selection. Please try again later.")
             except Exception as e:
-                await db.rollback()
                 logger.error("Database error for chat_id %s: %s", chat_id, str(e))
                 await query.edit_message_text(
                     "⚠️ Failed to save your selection. Please try again later."
@@ -876,13 +926,6 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 return ConversationHandler.END
 
             final_selection = ["Any"] if "Any" in selected_products else list(selected_products)
-            # FIX: Always start from DB, not cached_user
-            user = await db.get_user(chat_id)
-            if not user:
-                user = {"chat_id": chat_id}
-            user["products"] = final_selection
-            user["active"] = True
-            user["last_notified"] = {}
             product_message = "\n".join(
                 f"- {common.PRODUCT_NAME_MAP.get(p, p)}"
                 for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p)
@@ -904,12 +947,14 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.debug(
                     "Failed to edit message for chat_id %s: %s", chat_id, str(e)
                 )
+
             try:
-                await db.update_user(chat_id, user)
-                await db.commit()
-                await query.edit_message_text(f"✅ Your selections have been saved.\nYou will be notified for:\n \n{product_message}")
+                success = await _save_products(chat_id, final_selection)
+                if success:
+                    await query.edit_message_text(f"✅ Your selections have been saved.\nYou will be notified for:\n \n{product_message}")
+                else:
+                    await query.edit_message_text("❌ Sorry, there was a problem saving your selection. Please try again later.")
             except Exception as e:
-                await db.rollback()
                 logger.error("Database error for chat_id %s: %s", chat_id, str(e))
                 await query.edit_message_text("⚠️ Failed to save your selections. Please try again later.")
             # Clear state etc...
@@ -1002,6 +1047,67 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         logger.info("Error handling took %.2f seconds for chat_id %s", time.time() - start_time, chat_id)
         return ConversationHandler.END  # End conversation on error
 
+async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current user settings."""
+    chat_id = update.effective_chat.id
+    logger.info("Handling /my_settings command for chat_id %s", chat_id)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    user = await db.get_user(chat_id)
+    if not user:
+        await update.message.reply_text("*⚠️ You need to register first*. Use /setpincode to begin.", parse_mode="Markdown")
+        return
+
+    # Get pincode
+    pincode = user.get("pincode", "Not set")
+
+    # Get notification status
+    notification_status = "✅ Enabled" if user.get("active", False) else "❌ Disabled"
+
+    # Get notification preference with proper mapping
+    preference_names = {
+        "once_and_stop": "🔔 Notify once and stop",
+        "once_per_restock": "🔄 Notify once per restock",
+        "until_stop": "♾️ Notify until /stop"
+    }
+    notification_preference = user.get("notification_preference", "until_stop")
+    if isinstance(notification_preference, str):
+        try:
+            # Try to decode if it's a JSON string
+            notification_preference = json.loads(notification_preference)
+        except json.JSONDecodeError:
+            pass
+    preference_name = preference_names.get(notification_preference, "♾️ Notify until /stop")
+
+    # Get tracked products
+    products = user.get("products", ["Any"])
+    if isinstance(products, str):
+        try:
+            # Try to decode if it's a JSON string
+            products = json.loads(products)
+        except json.JSONDecodeError:
+            products = ["Any"]
+    
+    if not isinstance(products, list):
+        products = ["Any"]
+
+    # Format product names
+    if len(products) == 1 and products[0].lower() == "any":
+        product_message = "All available Amul Protein products 🧀"
+    else:
+        product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
+
+    # Construct and send the message
+    message = (
+        "📊 *Your Current Settings:*\n\n"
+        f"📍 Pincode: {pincode}\n\n"
+        f"🔔 Notifications: {notification_status}\n"
+        f"⚙️ Notification Preference: {preference_name}\n\n"
+        f"🧀 Tracked Products:\n{product_message}"
+    )
+
+    await update.message.reply_text(message, parse_mode="Markdown")
+
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Deactivates notifications for the user."""
     chat_id = update.effective_chat.id
@@ -1011,20 +1117,18 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user(chat_id)
     if user:
         if user.get("active"):
-            try:
-                user["active"] = False
-                await db.update_user(chat_id, user)
-                await db.commit()
-
+            # Set user to inactive
+            user["active"] = False
+            # Update in database
+            if await db.update_user(chat_id, user):
                 keyboard = [[InlineKeyboardButton("🔄 Re-activate", callback_data="reactivate")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
                 message_text = "❌ Notifications have been disabled. Use /start or click Re-activate button to enable again."
                 escaped_text = escape_markdown(message_text)
                 await update.message.reply_text(escaped_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
-            except Exception as e:
-                await db.rollback()
-                logger.error(f"Error deactivating notifications for chat_id {chat_id}: {str(e)}")
+            else:
+                logger.error(f"Failed to update user {chat_id} in database")
                 await update.message.reply_text("⚠️ Failed to deactivate notifications. Please try again.")
         else:
             await update.message.reply_text("ℹ️ Notifications are already disabled. Use /start to enable them.")
@@ -1039,17 +1143,13 @@ async def reactivate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user = await db.get_user(chat_id)
     if user:
-        try:
-            user["active"] = True
-            await db.update_user(chat_id, user)
-            await db.commit()
-
+        user["active"] = True
+        if await db.update_user(chat_id, user):
             message_text = "✅ Notifications have been re-enabled! 🔔"
             escaped_text = escape_markdown(message_text)
             await query.edit_message_text(escaped_text, parse_mode="MarkdownV2")
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"Error reactivating notifications for chat_id {chat_id}: {str(e)}")
+        else:
+            logger.error(f"Failed to update user {chat_id} in database")
             await query.edit_message_text("⚠️ Failed to reactivate notifications. Please try again.")
     else:
         await query.edit_message_text("⚠️ User not found. Please use /start to register.")
@@ -1251,43 +1351,34 @@ async def confirm_unfollow_handler(update: Update, context: ContextTypes.DEFAULT
     # Filter out the selected products from the user's current subscriptions
     updated_subscriptions = []
     updated_subscriptions_display_text ="\n You will now be notified for: \n"
-    print(f'original_products_list : {original_products_list}, curr_products_to_unfollow_list: {curr_products_to_unfollow_list}')
+    logger.info(f"Processing unfollow - Original products: {original_products_list}, To unfollow: {curr_products_to_unfollow_list}")
 
+    # Create list of products to keep
     for product in original_products_list:
         product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
-        product_display_name  = common.PRODUCT_NAME_MAP.get(product, product)
+        product_display_name = common.PRODUCT_NAME_MAP.get(product, product)
         if product_temp_id not in curr_products_to_unfollow_list:
-            updated_subscriptions_display_text += f"\n - {product_display_name}"
+            updated_subscriptions_display_text += f"\n- {product_display_name}"
             updated_subscriptions.append(product)
 
-    print(f'updated_subscriptions : {updated_subscriptions}')
-    user = context.user_data.get("cached_user", {})
-    unfollow_chat_id = context.user_data.get("unfollow_chat_id", 'unfollow_chat_id_not_found')
+    # If no products left, set to ["Any"]
+    if not updated_subscriptions:
+        updated_subscriptions = ["Any"]
+        updated_subscriptions_display_text = "\nYou will be notified for all available Amul Protein products 🧀"
 
-    #update the object
-    user["products"] = updated_subscriptions
-    user["active"] = True
-    user["last_notified"] = {}  # Reset notification timestamps!
-
-    logger.debug("Confirm selection for chat_id %s, final_selection: %s", unfollow_chat_id, updated_subscriptions)
-
-    try:
-        await query.edit_message_text("✅ Saving your selection...")
-        await asyncio.sleep(0.5)
-    except TelegramError as e:
-        logger.debug("Failed to edit message for chat_id %s: %s", unfollow_chat_id, str(e))
-
-    try:
-        await db.update_user(unfollow_chat_id, user)
-        await db.commit()
-        final_info_text_msg = "✅ Your selections have been updated."
-        if len(updated_subscriptions) > 0:
+    logger.info(f"Updating subscriptions for user {query.from_user.id} to: {updated_subscriptions}")
+    
+    # Save updated products and reset notification tracking
+    chat_id = query.from_user.id
+    success = await _save_products(chat_id, updated_subscriptions)
+    
+    if success:
+        final_info_text_msg = "✅ Successfully updated your subscriptions."
+        if updated_subscriptions_display_text:
             final_info_text_msg += updated_subscriptions_display_text
         await query.edit_message_text(final_info_text_msg)
-    except Exception as e:
-        await db.rollback()
-        logger.error("Database error for chat_id %s: %s", unfollow_chat_id, str(e))
-        await query.edit_message_text("❌ An error occurred while updating your subscriptions. Please try again later.")
+    else:
+        await query.edit_message_text("⚠️ Sorry, there was an issue updating your subscriptions. Please try again with /unfollow.")
 
     # Clear state data after completion
     context.user_data.pop("curr_products_to_unfollow", None)
@@ -1652,10 +1743,9 @@ async def bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_polling(app: Application):
     """Starts the bot in polling mode."""
     global db
-    db = Database(config.DATABASE_FILE)
+    db = Database(config.DATABASE_URL)
     await db._init_db()
 
-    # Clear all user data on startup to prevent stale states
     for chat_data in app.chat_data.values():
         for key in [k for k in chat_data.keys() if k.startswith("product_menu_") or k == "selected_products"]:
             chat_data.pop(key, None)
@@ -1668,8 +1758,7 @@ async def run_polling(app: Application):
     await app.updater.start_polling(timeout=5)
     logger.info("Polling started")
 
-    # Schedule periodic cleanup of support requests
-    app.job_queue.run_repeating(cleanup_support_requests, interval=3600)  # Run every hour
+    app.job_queue.run_repeating(cleanup_support_requests, interval=3600)
 
     try:
         await asyncio.Event().wait()
@@ -1684,7 +1773,7 @@ async def run_polling(app: Application):
             await db.close()
         logger.info("Bot shutdown complete")
 
-def main():
+async def main():
     """Main entry point for the bot."""
     logger.info("Starting main function")
 
@@ -1692,9 +1781,16 @@ def main():
         logger.error("Another instance of the bot is already running. Exiting...")
         raise SystemExit(1)
 
+    # Initialize database first
+    try:
+        await init_database()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        return
+
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
-    # Combined conversation handler for pincode, support, product selection, and admin reply
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("setpincode", set_pincode),
@@ -1715,23 +1811,23 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
             CommandHandler("support", support),
-            CommandHandler("setproducts", set_products)  # Allow restarting conversations
+            CommandHandler("setproducts", set_products)
         ],
-        per_message=False,  # Suppresses PTB warnings
+        per_message=False,
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("notification_preference", notification_preference))
     app.add_handler(CallbackQueryHandler(notification_preference_callback, pattern="^notif_pref_"))
-    app.add_handler(CommandHandler("reply", reply))  # Add direct /reply command
+    app.add_handler(CommandHandler("reply", reply))
     app.add_handler(CallbackQueryHandler(cancel_reply_callback, pattern='^cancel_reply_'))
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CallbackQueryHandler(reactivate_callback, pattern='^reactivate$'))
     app.add_handler(CallbackQueryHandler(broadcast_callback, pattern='^broadcast_'))
-    app.add_handler(CommandHandler("broadcast", broadcast))  # Add broadcast command handler
+    app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("bot_stats", bot_stats))
-    app.add_handler(CommandHandler("my_settings", status))
+    app.add_handler(CommandHandler("my_settings", my_settings))
 
     unfollow_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("unfollow", unfollow_command)],
@@ -1743,14 +1839,13 @@ def main():
             ]
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_unfollow_handler), # Allows user to type /cancel at any point
+            CommandHandler("cancel", cancel_unfollow_handler),
         ]
     )
     
-    # Register /unfollow command handler to unsubscribe from product notification
     app.add_handler(unfollow_conv_handler)
 
-    asyncio.run(run_polling(app))
+    await run_polling(app)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

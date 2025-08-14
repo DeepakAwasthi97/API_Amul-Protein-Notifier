@@ -4,17 +4,20 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# --- Database Configuration ---
+DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL connection string (required)
+DATABASE_FILE = os.getenv("DATABASE_FILE", "users.db")  # SQLite file path (optional, for migration)
 # --- Secrets and Environment-Specific ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # --- Concurrency Settings ---
-SEMAPHORE_LIMIT = 1         # Limit concurrent product checks to 1
-MAX_RETRY = 1            # Maximum retries for product availability checks
+SEMAPHORE_LIMIT = 1
+NOTIFICATION_CONCURRENCY_LIMIT = int(os.getenv("NOTIFICATION_CONCURRENCY_LIMIT", 30))  # Default to 30 for Telegram limit
+MAX_RETRY = 1
 
 # --- File Paths ---
-LOG_FILE = "product_check.log"  # Default log file
-DATABASE_FILE = "users.db"  # Default database file
+LOG_FILE = "product_check.log"
 
 # --- API Configuration ---
 BASE_URL = "https://shop.amul.com"
@@ -47,17 +50,17 @@ API_HEADERS = {
 }
 
 # --- Substore Mapping ---
-USE_SUBSTORE_CACHE = True   # If True, will use substore cache if available
-FALLBACK_TO_PINCODE_CACHE = True # If True, will use pincode cache if substore cache is not available
+USE_SUBSTORE_CACHE = True
+FALLBACK_TO_PINCODE_CACHE = True
 SUBSTORE_LIST_FILE = "substore_list.py"
 
 # --- Rate Limiting Settings ---
 PRODUCT_API_DELAY_RANGE = (1.0, 2.0)
-GLOBAL_PRODUCT_API_RPS = 5 # Requests per second
+GLOBAL_PRODUCT_API_RPS = 5
 
 # --- Logging and Monitoring ---
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_OF_DAYS = 1
 
 # --- Execution Mode ---
-EXECUTION_MODE = "Concurrent"  # Concurrent or Sequential
+EXECUTION_MODE = "Concurrent"

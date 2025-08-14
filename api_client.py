@@ -61,7 +61,7 @@ def get_tid_and_substore(session, pincode):
     logger.info(f"[SESSION] Visiting browse URL: {browse_url}")
     browse_resp = session.get(browse_url, headers=headers, timeout=10)
     logger.info(f"[SESSION] /en/browse/protein status: {browse_resp.status_code}")
-    logger.info(f"[SESSION] /en/browse/protein response (first 300 chars): {browse_resp.text[:300]}")
+    # logger.info(f"[SESSION] /en/browse/protein response (first 300 chars): {browse_resp.text[:300]}")
     pincode_params = {
         "limit": 50,
         "filters[0][field]": "pincode",
@@ -78,7 +78,7 @@ def get_tid_and_substore(session, pincode):
     logger.info(f"[SESSION] Looking up substore for pincode: {pincode_url}")
     pincode_resp = session.get(PINCODE_URL, headers=pincode_headers, params=pincode_params, timeout=10)
     logger.info(f"[SESSION] /entity/pincode status: {pincode_resp.status_code}")
-    logger.info(f"[SESSION] /entity/pincode response (first 300 chars): {pincode_resp.text[:300]}")
+    # logger.info(f"[SESSION] /entity/pincode response (first 300 chars): {pincode_resp.text[:300]}")
     pincode_data = pincode_resp.json()
     records = pincode_data.get('records', [])
     if not records:
@@ -109,7 +109,7 @@ def get_tid_and_substore(session, pincode):
     logger.info(f"[SESSION] Setting preferences for substore: {raw_substore}")
     pref_resp = session.put(pref_url, headers=pref_headers, data=json.dumps(pref_payload), timeout=10)
     logger.info(f"[SESSION] setPreferences status: {pref_resp.status_code}")
-    logger.info(f"[SESSION] setPreferences response (first 300 chars): {pref_resp.text[:300]}")
+    # logger.info(f"[SESSION] setPreferences response (first 300 chars): {pref_resp.text[:300]}")
     if pref_resp.status_code == 406:
         logger.error(f"[SESSION] 406 Not Acceptable for setPreferences with payload: {json.dumps(pref_payload)}")
         raise Exception(f"setPreferences failed with 406 for pincode {pincode}")
@@ -165,7 +165,7 @@ def fetch_product_data_for_alias(session, tid, substore_id, alias):
     logger.info(f"[SESSION] Fetching product data for alias '{alias}': {product_url}")
     resp = session.get(API_URL, headers=headers, params=query, timeout=10)
     logger.info(f"[SESSION] Product API status for alias '{alias}': {resp.status_code}")
-    logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {resp.text[:300]}")
+    # logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {resp.text[:300]}")
     try:
         return resp.json().get("data", [])
     except Exception as e:
@@ -200,7 +200,7 @@ async def fetch_product_data_for_alias_async(session, tid, substore_id, alias, s
                 async with session.get(API_URL, headers=headers, params=query, timeout=10) as resp:
                     text = await resp.text()
                     logger.info(f"[SESSION] Product API status for alias '{alias}': {resp.status}")
-                    logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {text[:300]}")
+                    # logger.info(f"[SESSION] Product API response for alias '{alias}' (first 300 chars): {text[:300]}")
                     if resp.status == 401:
                         logger.warning(f"401 Unauthorized for alias '{alias}', attempt {attempt}")
                         if attempt < max_retries:
