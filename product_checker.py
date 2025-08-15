@@ -85,6 +85,7 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
 
             # Only notify on restock events
             if is_restock:
+                logger.info(f"Restock detected for {product_name} user {chat_id}")
                 if product_name in last_notified:
                     try:
                         last_time = datetime.fromisoformat(last_notified[product_name])
@@ -92,8 +93,8 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
 
                         # Since we know this is a restock event:
                         # 1. Product is currently In Stock
-                        # 2. Product was Out of Stock at some point since last In Stock
-                        # So we just need a minimal cooldown to prevent edge cases
+                        # 2. Product was Out of Stock at some point since last In Stock (verified by is_restock)
+                        # Just have a minimal cooldown to prevent double notifications
                         if time_since_last.total_seconds() < 60:  # 1-minute cooldown
                             logger.debug(f"Skipping notification for {product_name} - too soon since last notification")
                             return False
@@ -101,11 +102,16 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Invalid timestamp for {product_name}, user {chat_id}: {e}")
                         # Continue with notification if timestamp is invalid
-                        
+                
                 logger.info(f"Notifying for restock of {product_name} for user {chat_id}")
                 return True
                 
-            logger.debug(f"Not a restock event for {product_name}, user {chat_id}")
+            # Product is in stock but not a restock event
+            logger.debug(f"Product {product_name} is in stock but not a restock event for user {chat_id}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error in once_per_restock handler for user {chat_id}: {str(e)}")
             return False
             
         except Exception as e:
@@ -528,16 +534,27 @@ async def check_products_for_users(db):
                     if user.get("notification_preference") == "once_and_stop":
                         last_notified = user.get("last_notified", {})
                         if check_all_products:
-                            if len(last_notified) >= len(PRODUCT_ALIAS_MAP):
-                                user["active"] = False
-                                await db.update_user(chat_id, user)
-                                await app.bot.send_message(chat_id=chat_id, text="Notified about all products. Notifications stopped. Use /start to reactivate.", parse_mode="Markdown")
+                            # For "Any", deactivate as soon as we've notified about ANY product
+                            if last_notified:  # If we've notified about at least one product
+                                if user.get("active", True):  # Only send message if user is still active
+                                    user["active"] = False
+                                    await db.update_user(chat_id, user)
+                                    await app.bot.send_message(
+                                        chat_id=chat_id, 
+                                        text="Notifications stopped after first available product notification. Use /start to reactivate and get notifications for more products.", 
+                                        parse_mode="Markdown"
+                                    )
                         else:
-                            remaining = [p for p in products_to_check if p not in last_notified]
-                            if not remaining:
+                            # For specific products, deactivate only when we've notified about all requested products
+                            notified_all = all(p in last_notified for p in products_to_check)
+                            if notified_all and user.get("active", True):  # Only send message if user is still active
                                 user["active"] = False
                                 await db.update_user(chat_id, user)
-                                await app.bot.send_message(chat_id=chat_id, text="Notified for all tracked products. Notifications stopped. Use /start to reactivate.", parse_mode="Markdown")
+                                await app.bot.send_message(
+                                    chat_id=chat_id, 
+                                    text="Notified for all tracked products. Notifications stopped. Use /start to reactivate.", 
+                                    parse_mode="Markdown"
+                                )
 
         finally:
             await app.shutdown()
