@@ -6,6 +6,7 @@ from config import LOG_FILE
 # Constants
 PRODUCTS = [
     "Any",
+    "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8",
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30",
@@ -32,6 +33,7 @@ PRODUCTS = [
 PRODUCT_NAME_MAP = {
     "Any": "❗ Any of the products from the list",
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30": "🍫🍫 Chocolate Milkshake 180mL | Pack of 30",
+    "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8": "🍫 Chocolate Milkshake 180mL | Pack of 8",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8": "☕ Coffee Milkshake 180mL | Pack of 8",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30": "☕☕ Coffee Milkshake 180mL | Pack of 30",
     "Amul Kool Protein Milkshake | Kesar, 180 mL | Pack of 8": "🌸 Kesar Milkshake 180mL | Pack of 8",
@@ -56,6 +58,7 @@ PRODUCT_NAME_MAP = {
 
 CATEGORIZED_PRODUCTS = {
     "Milkshakes & Shakes": [
+        "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8",
         "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30",
         "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8",
         "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30",
@@ -91,6 +94,7 @@ CATEGORIZED_PRODUCTS = {
 CATEGORIES = list(CATEGORIZED_PRODUCTS.keys())
 
 PRODUCT_ALIAS_MAP = {
+    "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8": "amul-kool-protein-milkshake-or-chocolate-180-ml-or-pack-of-8",
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30": "amul-kool-protein-milkshake-or-chocolate-180-ml-or-pack-of-30",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8": "amul-kool-protein-milkshake-or-arabica-coffee-180-ml-or-pack-of-8",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30": "amul-kool-protein-milkshake-or-arabica-coffee-180-ml-or-pack-of-30",
@@ -115,6 +119,7 @@ PRODUCT_ALIAS_MAP = {
 }
 
 TEMP_PRDCT_TO_ID_MAP = {
+    "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8": "akpmc8",
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30": "akpmc30",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8": "akpmac8",
     "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30": "akpmac30",
@@ -139,6 +144,7 @@ TEMP_PRDCT_TO_ID_MAP = {
 }
 
 TEMP_ID_TO_PRDCT_MAP = {
+    "akpmc8": "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8",
     "akpmc30": "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 30",
     "akpmac8": "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 8",
     "akpmac30": "Amul Kool Protein Milkshake | Arabica Coffee, 180 mL | Pack of 30",

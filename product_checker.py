@@ -276,9 +276,29 @@ async def check_products_for_users(db):
     try:
         await db.cleanup_state_history()
         users = await db.get_all_users()
+        total_users = len(users)
         if not users:
             logger.warning("No users found in database")
             return
+            
+        # Log user statistics
+        active_users = sum(1 for user in users if user.get("active", False))
+        configured_users = sum(1 for user in users 
+                             if user.get("pincode") and user.get("products"))
+        preference_stats = {
+            "until_stop": 0,
+            "once_and_stop": 0,
+            "once_per_restock": 0
+        }
+        for user in users:
+            pref = user.get("notification_preference", "until_stop")
+            preference_stats[pref] = preference_stats.get(pref, 0) + 1
+            
+        logger.info(f"User Statistics:")
+        logger.info(f"Total Users: {total_users}")
+        logger.info(f"Active Users: {active_users}")
+        logger.info(f"Configured Users: {configured_users}")
+        logger.info(f"Notification Preferences: {preference_stats}")
         state_groups = {}
         pincode_to_state = {}
         unmapped_users = []
