@@ -320,57 +320,40 @@ class Database:
         try:
             # Only consider In Stock status for restock events
             if current_status != "In Stock":
+                logger.debug(f"is_restock_event: current_status for {product_name} is not In Stock ({current_status})")
                 return False
-                
-            async with self._pool.acquire() as conn:
-                # Get all states since last In Stock state
-                history = await conn.fetch("""
-                    WITH last_in_stock AS (
-                        SELECT timestamp
-                        FROM state_product_history
-                        WHERE state_alias = $1 AND product_name = $2
-                          AND status = 'In Stock'
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                    )
-                    SELECT status, timestamp
-                    FROM state_product_history
-                    WHERE state_alias = $1 AND product_name = $2
-                      AND (
-                          timestamp > (SELECT timestamp FROM last_in_stock)
-                          OR NOT EXISTS (SELECT 1 FROM last_in_stock)
-                      )
-                    ORDER BY timestamp DESC
-                """, state_alias, product_name)
 
-                # If there's no history at all, it's a new product (treat as restock)
-                if not history:
-                    logger.info(f"New product {product_name} in {state_alias}, treating as restock")
+            # Use previous_state (from state_product_status before update) to decide
+            # previous_state is the row before we updated the current status
+            logger.debug(f"is_restock_event: previous_state for {product_name} in {state_alias}: {previous_state}")
+
+            # If we never saw this product before, consider it a restock (new product)
+            if not previous_state:
+                logger.info(f"is_restock_event: no previous state for {product_name} in {state_alias} - treating as restock")
+                return True
+
+            prev_status = previous_state.get('status') if isinstance(previous_state, dict) else None
+            prev_qty = previous_state.get('inventory_quantity') if isinstance(previous_state, dict) else None
+
+            # If previously not in stock, and now in stock => restock
+            if prev_status != 'In Stock':
+                logger.info(f"is_restock_event: {product_name} in {state_alias} changed from '{prev_status}' to 'In Stock' - restock")
+                return True
+
+            # Edge case: previous status was In Stock but quantity was 0 and now >0
+            try:
+                if prev_status == 'In Stock' and isinstance(prev_qty, int) and prev_qty == 0:
+                    logger.info(f"is_restock_event: {product_name} had In Stock with qty=0 previously, treating as restock when qty increases")
                     return True
+            except Exception:
+                pass
 
-                # Current state must be In Stock
-                current_record = history[0]
-                if current_record["status"] != "In Stock":
-                    return False
-
-                # For it to be a restock, we need:
-                # 1. Either no previous In Stock record (first time)
-                # 2. Or at least one Out of Stock state since last In Stock
-                previous_states = history[1:] if len(history) > 1 else []
-                was_out_of_stock = any(state["status"] == "Out of Stock" for state in previous_states)
-
-                is_restock = len(previous_states) == 0 or was_out_of_stock
-                if is_restock:
-                    if len(previous_states) == 0:
-                        logger.info(f"First time product {product_name} in {state_alias} is in stock")
-                    else:
-                        logger.info(f"Product {product_name} in {state_alias} restocked after going out of stock")
-
-                return is_restock
+            # Otherwise not a restock
+            logger.debug(f"is_restock_event: {product_name} in {state_alias} is In Stock and was already In Stock previously - not a restock")
+            return False
 
         except Exception as e:
             logger.error(f"Error checking restock event for {product_name} in {state_alias}: {e}")
-            # If we can't determine, assume it's not a restock to avoid duplicate notifications
             return False
 
     async def get_last_state_change(self, state_alias, product_name):

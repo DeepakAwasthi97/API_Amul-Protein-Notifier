@@ -31,7 +31,7 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
             logger.error(f"Invalid user data type for chat_id {chat_id}: {type(user)}")
             return False
 
-        # Basic validation checks
+    # Basic validation checks
         if status != "In Stock":
             logger.debug(f"Product {product_name} not in stock for user {chat_id}")
             return False
@@ -51,6 +51,11 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
             except json.JSONDecodeError:
                 logger.warning(f"Invalid last_notified JSON for user {chat_id}, resetting to empty")
                 last_notified = {}
+        # DEBUG: Log current decision inputs
+        logger.debug(
+            f"Decision inputs for user={chat_id} product={product_name} preference={preference} "
+            f"status={status} is_restock={is_restock} last_notified_keys={list(last_notified.keys())} active={user.get('active')} products={user.get('products')}"
+        )
     except Exception as e:
         logger.error(f"Error in initial notification check for user {chat_id}: {str(e)}")
         return False
@@ -72,10 +77,9 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
         if product_name not in last_notified:
             logger.info(f"First notification for product {product_name}")
             return True
-            
-        logger.debug(f"Already notified for {product_name}, skipping (once_and_stop)")
+        logger.debug(f"Already notified for {product_name}, skipping (once_and_stop). last_notified contains: {list(last_notified.keys())}")
         return False
-        
+
     elif preference == "once_per_restock":
         try:
             # Handle first-time tracking
@@ -96,16 +100,15 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
                         # 2. Product was Out of Stock at some point since last In Stock (verified by is_restock)
                         # Just have a minimal cooldown to prevent double notifications
                         if time_since_last.total_seconds() < 60:  # 1-minute cooldown
-                            logger.debug(f"Skipping notification for {product_name} - too soon since last notification")
+                            logger.debug(f"Skipping notification for {product_name} - too soon since last notification (time_since_last={time_since_last.total_seconds():.1f}s)")
                             return False
-                            
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Invalid timestamp for {product_name}, user {chat_id}: {e}")
                         # Continue with notification if timestamp is invalid
-                
+
                 logger.info(f"Notifying for restock of {product_name} for user {chat_id}")
                 return True
-                
+
             # Product is in stock but not a restock event
             logger.debug(f"Product {product_name} is in stock but not a restock event for user {chat_id}")
             return False
@@ -113,15 +116,11 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
         except Exception as e:
             logger.error(f"Error in once_per_restock handler for user {chat_id}: {str(e)}")
             return False
-            
-        except Exception as e:
-            logger.error(f"Error in once_per_restock handler for user {chat_id}: {str(e)}")
-            return False
-        
+
     elif preference == "until_stop":
         # Always notify while in stock
         return True
-        
+
     return False
 
 # In product_checker.py, update_user_notification_tracking
@@ -156,10 +155,12 @@ async def update_user_notification_tracking(user, product_name, db):
 
         # Update the tracking based on preference
         if preference in ["once_and_stop", "once_per_restock"]:
+            # Update in-memory structure first so callers see immediate change
             last_notified[product_name] = now_iso
+            user['last_notified'] = last_notified
             path = ['last_notified']
             await db.update_user_partial(chat_id, path, json.dumps(last_notified))
-            logger.debug(f"Updated {preference} notification tracking for user {chat_id} - {product_name}")
+            logger.debug(f"Updated {preference} notification tracking for user {chat_id} - {product_name}. last_notified now: {list(last_notified.keys())}")
             return True
 
     except Exception as e:
