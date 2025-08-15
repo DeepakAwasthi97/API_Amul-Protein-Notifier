@@ -8,6 +8,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def send_telegram_notification_for_user(app, chat_id, pincode, products_to_check, notify_products, max_retries=3):
+    # Return codes: True = success, False = temporary error (retry ok), None = permanent error (don't retry)
+    try:
+        chat_id = int(chat_id)  # Ensure chat_id is an integer
+    except ValueError:
+        logger.error(f"Invalid chat_id format: {chat_id}")
+        return None  # Permanent error, don't retry
+
     logger.info(f"Attempting to send notification to chat_id {chat_id} for pincode {pincode}")
     logger.debug(f"Products to check: {products_to_check}")
     logger.debug(f"Notify products: {notify_products}")
@@ -51,6 +58,18 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
             else:
                 logger.error(f"Timeout sending notification to chat_id {chat_id} after {max_retries} attempts")
                 return False
-        except Exception as e:
-            logger.error(f"Error sending notification to chat_id {chat_id}: {str(e)}")
+        except ValueError as e:
+            logger.error(f"Invalid chat_id format for {chat_id}: {str(e)}. Skipping notification.")
             return False
+        except Exception as e:
+            error_msg = str(e)
+            if any(x in error_msg.lower() for x in ["chat not found", "bot was blocked", "forbidden", "bad request"]):
+                logger.error(f"Permanent error for chat_id {chat_id}: {error_msg}")
+                return None  # Permanent error, don't retry
+            
+            logger.error(f"Temporary error sending notification to chat_id {chat_id}: {error_msg}")
+            if attempt < max_retries - 1:
+                logger.info(f"Will retry notification for chat_id {chat_id} ({attempt + 2}/{max_retries})")
+                await asyncio.sleep(2)  # Longer delay for unexpected errors
+                continue
+            return False  # Temporary error after all retries failed

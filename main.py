@@ -1659,9 +1659,12 @@ async def bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for state_data in substore_info:
         state = state_data["name"]
         if state_data["pincodes"]:
-            pincodes = state_data["pincodes"].split(",")
+            pincodes = state_data["pincodes"]
+            # Handle both string and list cases
+            if isinstance(pincodes, str):
+                pincodes = pincodes.split(",")
             for pincode in pincodes:
-                pincode_to_state[pincode.strip()] = state
+                pincode_to_state[str(pincode).strip()] = state
 
     user_states = [pincode_to_state.get(user.get("pincode", "").strip(), "Unknown") for user in all_users]
     known_user_states = [state for state in user_states if state != "Unknown"]

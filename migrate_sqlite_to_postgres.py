@@ -59,13 +59,27 @@ async def migrate_data():
                 """)
                 logger.info("Created PostgreSQL users table")
 
+                # Get existing chat_ids from PostgreSQL
+                logger.info("Fetching existing users from PostgreSQL...")
+                existing_chat_ids = set()
+                pg_users = await pg_conn.fetch("SELECT chat_id FROM users")
+                for user in pg_users:
+                    existing_chat_ids.add(str(user['chat_id']))
+                logger.info(f"Found {len(existing_chat_ids)} existing users in PostgreSQL")
+
                 # Migrate users table
                 user_batch = []
                 valid_users = 0
                 invalid_users = 0
+                skipped_users = 0
                 async with sqlite_conn.execute("SELECT chat_id, data FROM users") as cursor:
                     async for row in cursor:
                         chat_id = row[0]
+                        
+                        # Skip if user already exists in PostgreSQL
+                        if str(chat_id) in existing_chat_ids:
+                            skipped_users += 1
+                            continue
                         try:
                             # Handle SQLite data: string (JSON) or dict
                             if isinstance(row[1], str):
@@ -95,8 +109,13 @@ async def migrate_data():
                     # Batch insert
                     if user_batch:
                         try:
+                            # Insert users that don't exist yet
                             await pg_conn.executemany(
-                                "INSERT INTO users (chat_id, data) VALUES ($1, $2::jsonb)",
+                                """
+                                INSERT INTO users (chat_id, data) 
+                                VALUES ($1, $2::jsonb)
+                                ON CONFLICT (chat_id) DO NOTHING
+                                """,
                                 user_batch
                             )
                             valid_users = len(user_batch)
@@ -115,7 +134,13 @@ async def migrate_data():
 
         await sqlite_conn.close()
         await pg_pool.close()
-        logger.info(f"Migration completed successfully: {valid_users} valid, {invalid_users} invalid")
+        logger.info(f"Migration complete:")
+        logger.info(f"- {valid_users} valid users migrated")
+        logger.info(f"- {skipped_users} existing users skipped")
+        logger.info(f"- {invalid_users} invalid users skipped")
+        logger.info(f"Migration ended at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Close connections
 
     except Exception as e:
         logger.error(f"Migration failed: {e}")

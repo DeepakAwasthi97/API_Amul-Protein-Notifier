@@ -26,28 +26,34 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
     chat_id = user.get('chat_id', 'unknown')
     logger.info(f"Checking notification criteria for user {chat_id}, product '{product_name}', status '{status}'")
     
-    if not isinstance(user, dict):
-        logger.error(f"Invalid user data type for chat_id {chat_id}: {type(user)}")
-        return False
+    try:
+        if not isinstance(user, dict):
+            logger.error(f"Invalid user data type for chat_id {chat_id}: {type(user)}")
+            return False
 
-    # Don't notify if product is not in stock
-    if status != "In Stock":
-        return False
+        # Basic validation checks
+        if status != "In Stock":
+            logger.debug(f"Product {product_name} not in stock for user {chat_id}")
+            return False
 
-    # Don't notify if user is not active
-    if not user.get("active", False):
-        return False
+        if not user.get("active", False):
+            logger.debug(f"User {chat_id} is not active")
+            return False
 
-    # Get notification preference and last notified info
-    preference = user.get("notification_preference", "until_stop")
-    last_notified = user.get("last_notified", {})
-    
-    # Try to decode if it's a JSON string
-    if isinstance(last_notified, str):
-        try:
-            last_notified = json.loads(last_notified)
-        except json.JSONDecodeError:
-            last_notified = {}
+        # Get and validate notification preference
+        preference = user.get("notification_preference", "until_stop")
+        last_notified = user.get("last_notified", {})
+        
+        # Handle JSON string format of last_notified
+        if isinstance(last_notified, str):
+            try:
+                last_notified = json.loads(last_notified)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid last_notified JSON for user {chat_id}, resetting to empty")
+                last_notified = {}
+    except Exception as e:
+        logger.error(f"Error in initial notification check for user {chat_id}: {str(e)}")
+        return False
 
     if preference == "once_and_stop":
         # For all products tracking ("Any"), handle all available products
@@ -71,30 +77,37 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
         return False
         
     elif preference == "once_per_restock":
-        check_all_products = len(user.get("products", [])) == 1 and user.get("products", [""])[0].lower() == "any"
-        
-        # Handle first-time tracking specially
-        if not last_notified:
-            # For first check, notify about in-stock products
-            logger.info(f"First-time check for user {user.get('chat_id')}, product {product_name}")
-            return True
+        try:
+            # Handle first-time tracking
+            if not last_notified:
+                logger.info(f"First-time check for user {chat_id}, product {product_name}")
+                return True
 
-        # For all subsequent checks, ONLY notify if:
-        # 1. It's an actual restock event (status changed from not-in-stock to in-stock)
-        # 2. Or it's a completely new product we've never seen before
-        if is_restock:
-            if product_name in last_notified:
-                last_time = datetime.fromisoformat(last_notified[product_name])
-                time_since_last = datetime.now() - last_time
-                # Prevent duplicate notifications for the same restock event
-                # (in case our 5-minute check catches the same restock multiple times)
-                if time_since_last.total_seconds() < 300:  # 5 minutes
-                    logger.info(f"Skipping notification for {product_name} - too soon since last notification")
-                    return False
-            logger.info(f"Notifying for restock of {product_name}")
-            return True
+            # Only notify on restock events
+            if is_restock:
+                if product_name in last_notified:
+                    try:
+                        last_time = datetime.fromisoformat(last_notified[product_name])
+                        time_since_last = datetime.now() - last_time
+                        
+                        # Prevent duplicate notifications within 5 minutes
+                        if time_since_last.total_seconds() < 300:
+                            logger.debug(f"Skipping notification for {product_name} - too soon since last notification")
+                            return False
+                            
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid timestamp for {product_name}, user {chat_id}: {e}")
+                        # Continue with notification if timestamp is invalid
+                        
+                logger.info(f"Notifying for restock of {product_name} for user {chat_id}")
+                return True
+                
+            logger.debug(f"Not a restock event for {product_name}, user {chat_id}")
+            return False
             
-        return False
+        except Exception as e:
+            logger.error(f"Error in once_per_restock handler for user {chat_id}: {str(e)}")
+            return False
         
     elif preference == "until_stop":
         # Always notify while in stock
@@ -107,42 +120,44 @@ async def update_user_notification_tracking(user, product_name, db):
     """Update last_notified timestamp for a product using partial update."""
     if not isinstance(user, dict):
         logger.error(f"Invalid user data type for chat_id {user.get('chat_id', 'unknown')}: {type(user)}")
-        return
+        return False
 
     try:
         chat_id = int(user["chat_id"])
-        preference = user.get("notification_preference", "until_stop")
+    except (ValueError, KeyError, TypeError):
+        logger.error(f"Invalid chat_id in user data: {user.get('chat_id', 'unknown')}")
+        return False
 
-        # For once_and_stop, record the notification
-        # Update notification tracking for both once_and_stop and once_per_restock
+    try:
+        preference = user.get("notification_preference", "until_stop")
+        now_iso = datetime.now().isoformat()
+
+        if preference == "until_stop":
+            logger.debug(f"No tracking needed for until_stop preference - user {chat_id}")
+            return True
+
+        # Get current last_notified data
+        last_notified = user.get("last_notified", {})
+        if isinstance(last_notified, str):
+            try:
+                last_notified = json.loads(last_notified)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid last_notified JSON for user {chat_id}, resetting")
+                last_notified = {}
+
+        # Update the tracking based on preference
         if preference in ["once_and_stop", "once_per_restock"]:
-            now_iso = datetime.now().isoformat()
-            last_notified = user.get("last_notified", {})
-            if isinstance(last_notified, str):
-                try:
-                    last_notified = json.loads(last_notified)
-                except json.JSONDecodeError:
-                    last_notified = {}
-                    
             last_notified[product_name] = now_iso
             path = ['last_notified']
             await db.update_user_partial(chat_id, path, json.dumps(last_notified))
-            logging.debug(f"Updated once_and_stop notification tracking for user {chat_id} - {product_name}")
-
-        # For once_per_restock, we only track the last notification time
-        elif preference == "once_per_restock":
-            now_iso = datetime.now().isoformat()
-            path = ['last_notified', product_name]
-            await db.update_user_partial(chat_id, path, json.dumps(now_iso))
-            logging.debug(f"Updated once_per_restock notification tracking for user {chat_id} - {product_name}")
-
-        # For until_stop, we don't need to track notifications
-        elif preference == "until_stop":
-            logging.debug(f"No tracking needed for until_stop preference - user {chat_id}")
-            return
+            logger.debug(f"Updated {preference} notification tracking for user {chat_id} - {product_name}")
+            return True
 
     except Exception as e:
-        logger.error(f"Error updating notification tracking for user {user.get('chat_id', 'unknown')}: {e}")
+        logger.error(f"Error updating notification tracking for user {chat_id}, product {product_name}: {str(e)}")
+        return False
+
+    return True
 
 async def get_products_availability_api_only_async(pincode, max_concurrent_products=SEMAPHORE_LIMIT):
     logger.info(f"Fetching availability for pincode: {pincode}")
@@ -200,6 +215,61 @@ async def check_product_availability_for_state(state_alias, sample_pincode, db):
     except Exception as e:
         logger.error(f"Error checking state {state_alias}: {e}")
         return [], {}
+
+async def validate_user_state(user, db):
+    """
+    Validate that a user is still active and has a valid configuration.
+    """
+    try:
+        chat_id = user.get("chat_id")
+        if not chat_id:
+            logger.warning("User has no chat_id")
+            return False
+
+        # Check if user is marked as active
+        if not user.get("active", False):
+            logger.debug(f"User {chat_id} is not active")
+            return False
+
+        # Check for valid pincode
+        pincode = user.get("pincode")
+        if not pincode:
+            logger.warning(f"User {chat_id} has no pincode")
+            return False
+
+        # Check for valid product preferences
+        products = user.get("products", [])
+        if not products:
+            logger.warning(f"User {chat_id} has no product preferences")
+            return False
+
+        # All checks passed
+        return True
+
+    except Exception as e:
+        logger.error(f"Error validating user state: {str(e)}")
+        return False
+
+async def should_deactivate_user(chat_id, app):
+    """
+    Determine if a user should be deactivated based on their chat state.
+    """
+    try:
+        async with asyncio.timeout(5):
+            # Try to get chat member info
+            chat = await app.bot.get_chat(chat_id)
+            if not chat:
+                logger.info(f"Chat {chat_id} not found")
+                return True
+            return False
+    except Exception as e:
+        error_msg = str(e).lower()
+        # Deactivate if bot was blocked or chat not found
+        if "blocked" in error_msg or "not found" in error_msg or "forbidden" in error_msg:
+            return True
+        # For other errors, don't deactivate
+        logger.error(f"Error checking chat state for {chat_id}: {str(e)}")
+        return False
 
 async def check_products_for_users(db):
     logger.info("Starting product check for all users")
@@ -288,6 +358,9 @@ async def check_products_for_users(db):
 
             notification_semaphore = asyncio.Semaphore(NOTIFICATION_CONCURRENCY_LIMIT)
             notification_tasks = []
+            user_notifications = {}  # Track notifications per user: chat_id -> (products, state)
+            
+            # First pass: collect all notifications per user across all states
             for idx, state_alias in enumerate(states_to_check):
                 if isinstance(results[idx], Exception):
                     logger.error(f"Error processing state {state_alias}: {results[idx]}")
@@ -300,7 +373,18 @@ async def check_products_for_users(db):
                     if not isinstance(user, dict):
                         logger.error(f"Invalid user data type for state {state_alias}")
                         continue
+                    
                     chat_id = user.get("chat_id")
+                    if not chat_id:
+                        logger.warning(f"User in state {state_alias} has no chat_id")
+                        continue
+
+                    try:
+                        chat_id = int(chat_id)  # Convert to int early to catch invalid format
+                    except ValueError:
+                        logger.error(f"Invalid chat_id format in state {state_alias}: {chat_id}")
+                        continue
+                        
                     products_to_check = user.get("products", [])
                     if not chat_id or not products_to_check:
                         continue
@@ -310,32 +394,106 @@ async def check_products_for_users(db):
                         if (check_all_products or name in products_to_check) and
                            await should_notify_user(user, name, status, state_alias, db, restock_info.get(name, False))
                     ]
-                    products_notified = [name for name, _, _ in notify_products]
                     if notify_products:
-                        logger.info(f"Preparing to notify user {chat_id} about products: {products_notified}")
-                        if chat_id not in user_locks:
-                            user_locks[chat_id] = asyncio.Lock()
-                        async def locked_send():
-                            async with user_locks[chat_id]:
-                                async with notification_semaphore:
-                                    logger.info(f"Starting notification process for user {chat_id}")
-                                    success = await send_telegram_notification_for_user(
-                                        app, 
-                                        chat_id, 
-                                        user.get('pincode'), 
-                                        products_to_check, 
-                                        notify_products
-                                    )
-                                    # Only update last_notified if notification was successful
-                                    if success:
-                                        for product_name in products_notified:
-                                            await update_user_notification_tracking(user, product_name, db)
-                                        logger.info(f"Successfully notified user {chat_id} for {len(products_notified)} products")
-                                    else:
-                                        logger.error(f"Failed to notify user {chat_id}, not updating notification tracking")
-                        notification_tasks.append(locked_send())
+                        products_notified = [name for name, _, _ in notify_products]
+                        if chat_id in user_notifications:
+                            # Merge with existing notifications
+                            existing_products = user_notifications[chat_id][0]
+                            existing_notify = user_notifications[chat_id][1]
+                            merged_products = list(set(existing_products + products_to_check))
+                            merged_notify = [(n, s, q) for n, s, q in notify_products + existing_notify
+                                          if (n, s, q) not in existing_notify]
+                            user_notifications[chat_id] = (merged_products, merged_notify)
+                            logger.debug(f"Merged notifications for user {chat_id}")
+                        else:
+                            user_notifications[chat_id] = (products_to_check, notify_products)
+                            if chat_id not in user_locks:
+                                user_locks[chat_id] = asyncio.Lock()
+                        logger.info(f"Prepared notifications for user {chat_id}: {products_notified}")
+                        
+            # Define the notification sending function outside the loop
+            async def locked_send(chat_id, user, products_to_check, notify_products, products_notified):
+                try:
+                    async with user_locks[chat_id]:
+                        if not await validate_user_state(user, db):
+                            logger.info(f"User {chat_id} is no longer active or has invalid configuration")
+                            return None  # Don't retry for invalid users
+                        async with notification_semaphore:
+                            logger.info(f"Starting notification process for user {chat_id}")
+                            result = await send_telegram_notification_for_user(
+                                app, 
+                                chat_id, 
+                                user.get('pincode'), 
+                                products_to_check, 
+                                notify_products
+                            )
+                            if result is True:  # Success
+                                try:
+                                    for product_name in products_notified:
+                                        await update_user_notification_tracking(user, product_name, db)
+                                    logger.info(f"Successfully notified user {chat_id} for {len(products_notified)} products")
+                                    return True
+                                except Exception as e:
+                                    logger.error(f"Error updating notification tracking for user {chat_id}: {str(e)}")
+                                    return True  # Still return True as notification succeeded
+                            elif result is None:  # Permanent error
+                                logger.warning(f"Permanent error for user {chat_id}, deactivating...")
+                                await db.update_user_partial(chat_id, ["active"], False)
+                                return None  # Don't retry
+                            else:  # Temporary error (False)
+                                logger.warning(f"Temporary error for user {chat_id}, may retry")
+                except asyncio.CancelledError:
+                    logger.warning(f"Notification task cancelled for user {chat_id}")
+                    raise
+                except Exception as e:
+                    logger.error(f"Unexpected error in notification task for user {chat_id}: {str(e)}")
+                    return False
+                return True
 
-            await asyncio.gather(*notification_tasks, return_exceptions=True)
+            # After collecting all notifications, create tasks
+            for chat_id, (products_to_check, notify_products) in user_notifications.items():
+                products_notified = [name for name, _, _ in notify_products]
+                logger.info(f"Creating notification task for user {chat_id} with {len(products_notified)} products")
+                # Find the user object for this chat_id
+                user = next((u for users in state_groups.values() for u in users if str(u.get("chat_id")) == str(chat_id)), None)
+                # Create and add the task with name for better tracking
+                task = asyncio.create_task(
+                    locked_send(chat_id, user, products_to_check, notify_products, products_notified),
+                    name=f"notify_{chat_id}"
+                )
+                notification_tasks.append(task)
+
+            # Wait for all notification tasks to complete and handle any errors
+            if notification_tasks:
+                logger.info(f"Waiting for {len(notification_tasks)} notification tasks to complete...")
+                try:
+                    results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+                    success_count = 0
+                    permanent_error_count = 0
+                    temp_error_count = 0
+                    
+                    for i, result in enumerate(results):
+                        task_name = notification_tasks[i].get_name()
+                        if isinstance(result, Exception):
+                            logger.error(f"Notification task {task_name} failed with error: {str(result)}")
+                            temp_error_count += 1
+                        elif result is True:
+                            success_count += 1
+                        elif result is None:
+                            permanent_error_count += 1
+                        else:
+                            temp_error_count += 1
+                            
+                    logger.info(
+                        f"Completed notifications: {success_count} successful, "
+                        f"{permanent_error_count} permanent failures, "
+                        f"{temp_error_count} temporary failures out of {len(notification_tasks)} total"
+                    )
+                except Exception as e:
+                    logger.error(f"Error while gathering notification tasks: {str(e)}")
+            else:
+                logger.info("No notifications to send")
+            logger.info("All notification tasks completed")
 
             for state_alias, users in state_groups.items():
                 for user in users:
