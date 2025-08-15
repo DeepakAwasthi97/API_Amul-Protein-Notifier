@@ -89,9 +89,12 @@ async def should_notify_user(user, product_name, status, state_alias, db, is_res
                     try:
                         last_time = datetime.fromisoformat(last_notified[product_name])
                         time_since_last = datetime.now() - last_time
-                        
-                        # Prevent duplicate notifications within 5 minutes
-                        if time_since_last.total_seconds() < 300:
+
+                        # Since we know this is a restock event:
+                        # 1. Product is currently In Stock
+                        # 2. Product was Out of Stock at some point since last In Stock
+                        # So we just need a minimal cooldown to prevent edge cases
+                        if time_since_last.total_seconds() < 60:  # 1-minute cooldown
                             logger.debug(f"Skipping notification for {product_name} - too soon since last notification")
                             return False
                             

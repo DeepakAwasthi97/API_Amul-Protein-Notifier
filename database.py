@@ -295,15 +295,21 @@ class Database:
                             inventory_quantity = EXCLUDED.inventory_quantity,
                             timestamp = EXCLUDED.timestamp
                     """, state_alias, product_name, status, inventory_quantity, now_iso)
-                    if not previous_state or previous_state["status"] != status:
+                    state_changed = (
+                        not previous_state or 
+                        previous_state["status"] != status or 
+                        (previous_state["status"] == "In Stock" and previous_state["inventory_quantity"] == 0 and inventory_quantity > 0)
+                    )
+                    
+                    if state_changed:
                         await conn.execute("""
                             INSERT INTO state_product_history
                             (state_alias, product_name, status, inventory_quantity, timestamp)
                             VALUES ($1, $2, $3, $4, $5)
                         """, state_alias, product_name, status, inventory_quantity, now_iso)
-                        logging.info(f"State transition: {state_alias} - {product_name} - {status} (previous: {previous_state['status'] if previous_state else 'None'})")
+                        logging.info(f"State transition: {state_alias} - {product_name} - {status} (quantity: {inventory_quantity}) [previous: {previous_state['status'] if previous_state else 'None'}]")
                     else:
-                        logging.debug(f"No state transition for {state_alias} - {product_name}: status unchanged")
+                        logging.debug(f"No significant state change for {state_alias} - {product_name}: status unchanged")
                     return previous_state
         except asyncpg.exceptions.PostgresError as e:
             logging.error(f"Error recording state change for {state_alias} - {product_name}: {e}")
@@ -317,13 +323,24 @@ class Database:
                 return False
                 
             async with self._pool.acquire() as conn:
-                # Get the last two status records to check for transitions and timing
+                # Get all states since last In Stock state
                 history = await conn.fetch("""
+                    WITH last_in_stock AS (
+                        SELECT timestamp
+                        FROM state_product_history
+                        WHERE state_alias = $1 AND product_name = $2
+                          AND status = 'In Stock'
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    )
                     SELECT status, timestamp
                     FROM state_product_history
                     WHERE state_alias = $1 AND product_name = $2
+                      AND (
+                          timestamp > (SELECT timestamp FROM last_in_stock)
+                          OR NOT EXISTS (SELECT 1 FROM last_in_stock)
+                      )
                     ORDER BY timestamp DESC
-                    LIMIT 2
                 """, state_alias, product_name)
 
                 # If there's no history at all, it's a new product (treat as restock)
@@ -331,27 +348,23 @@ class Database:
                     logger.info(f"New product {product_name} in {state_alias}, treating as restock")
                     return True
 
+                # Current state must be In Stock
                 current_record = history[0]
-                previous_record = history[1] if len(history) > 1 else None
+                if current_record["status"] != "In Stock":
+                    return False
 
-                # Calculate how long the product has been in its current state
-                now = datetime.now()
-                current_time = datetime.fromisoformat(current_record["timestamp"])
-                time_in_current_state = now - current_time
+                # For it to be a restock, we need:
+                # 1. Either no previous In Stock record (first time)
+                # 2. Or at least one Out of Stock state since last In Stock
+                previous_states = history[1:] if len(history) > 1 else []
+                was_out_of_stock = any(state["status"] == "Out of Stock" for state in previous_states)
 
-                # For restock detection, ONLY consider it a restock if:
-                # 1. Product just came into stock (status changed from something else to "In Stock")
-                # 2. It's a completely new product we've never seen before
-                if not previous_record:
-                    # Brand new product we've never seen before
-                    is_restock = True
-                    logger.info(f"New product {product_name} in {state_alias}, treating first appearance as restock")
-                else:
-                    # Only consider it a restock if status changed from not "In Stock" to "In Stock"
-                    is_restock = (current_record["status"] == "In Stock" and 
-                                previous_record["status"] != "In Stock")
-                    if is_restock:
-                        logger.info(f"Product {product_name} in {state_alias} changed from '{previous_record['status']}' to 'In Stock'")
+                is_restock = len(previous_states) == 0 or was_out_of_stock
+                if is_restock:
+                    if len(previous_states) == 0:
+                        logger.info(f"First time product {product_name} in {state_alias} is in stock")
+                    else:
+                        logger.info(f"Product {product_name} in {state_alias} restocked after going out of stock")
 
                 return is_restock
 
