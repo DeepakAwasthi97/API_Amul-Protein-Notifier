@@ -25,7 +25,7 @@ import sys
 import common
 import config
 from database import Database
-from config import DATABASE_URL
+from config import DATABASE_URL, BASE_URL
 
 logger = common.setup_logging()
 logger.setLevel(logging.DEBUG)
@@ -1095,7 +1095,7 @@ async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(products) == 1 and products[0].lower() == "any":
         product_message = "All available Amul Protein products 🧀"
     else:
-        product_message = "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
+        product_message = "\n".join(f"- [{common.PRODUCT_NAME_MAP.get(p, p)}]({BASE_URL + "/en/product/" + common.PRODUCT_ALIAS_MAP.get(p)})" for p in products)
 
     # Construct and send the message
     message = (
@@ -1106,7 +1106,7 @@ async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧀 Tracked Products:\n{product_message}"
     )
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await update.message.reply_text(message, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Deactivates notifications for the user."""
