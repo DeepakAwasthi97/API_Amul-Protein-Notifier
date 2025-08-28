@@ -1095,7 +1095,12 @@ async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(products) == 1 and products[0].lower() == "any":
         product_message = "All available Amul Protein products 🧀"
     else:
-        product_message = "\n".join(f"- [{common.PRODUCT_NAME_MAP.get(p, p)}]({BASE_URL + "/en/product/" + common.PRODUCT_ALIAS_MAP.get(p)})" for p in products)
+        # Build product lines defensively to avoid f-string parsing issues
+        # on older Python versions or environments.
+        product_message = "\n".join(
+            f"- [{common.PRODUCT_NAME_MAP.get(p, p)}]({BASE_URL + '/en/product/' + common.PRODUCT_ALIAS_MAP.get(p)})"
+            for p in products
+        )
 
     # Construct and send the message
     message = (
