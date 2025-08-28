@@ -41,7 +41,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
         product_slug = PRODUCT_ALIAS_MAP.get(name)
         product_link = f"{BASE_URL}/en/product/{product_slug}"
         if product_slug:
-            message += f"- [{short_name}]({product_link}) \n(Quantity Left: {quantity})\n"
+            message += f"- {short_name} \n(Quantity Left: {quantity}) | [Buy Now]({product_link})\n"
         else:
             message += f"- {short_name} \n(Quantity Left: {quantity})\n"
 
