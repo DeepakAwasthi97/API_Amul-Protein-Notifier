@@ -3,7 +3,8 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 from utils import mask
-from common import PRODUCT_NAME_MAP
+from common import PRODUCT_NAME_MAP, PRODUCT_ALIAS_MAP
+from config import BASE_URL
 import logging
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,13 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
     ]
     for name, _, quantity in relevant_products:
         short_name = PRODUCT_NAME_MAP.get(name, name)
-        message += f"- {short_name} \n(Quantity Left: {quantity})\n"
+        product_slug = PRODUCT_ALIAS_MAP.get(name)
+        product_link = f"{BASE_URL}/en/product/{product_slug}"
+        if product_slug:
+            message += f"- {short_name} \n(Quantity Left: {quantity}) | [Buy Now]({product_link})\n"
+        else:
+            message += f"- {short_name} \n(Quantity Left: {quantity})\n"
+
 
     if not check_all_products:
         message += '\nUse /unfollow to stop notifications for specific products.'
@@ -48,7 +55,7 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(10):  # 10 second timeout per attempt
-                await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown", disable_web_page_preview=True)
                 logger.info(f"Successfully sent notification to chat_id {chat_id}")
                 return True  # Successfully sent
         except asyncio.TimeoutError:
