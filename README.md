@@ -5,10 +5,11 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 ## Features
 
 - Checks product availability via Amul's API (no Selenium required)
-- Notifies users on Telegram when products are in stock
+- Notifies users on Telegram when products are in stock based on their pincode
 - Caching and retry logic for reliability
 - Configurable log rotation and error handling
 - Modular codebase for easy maintenance
+- Customizable product selection to only receive certain notifications
 
 ## Main Files
 
