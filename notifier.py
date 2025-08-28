@@ -42,7 +42,8 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
         product_link = f"{BASE_URL}/en/product/{product_slug}"
         if product_slug:
             message += f"- [{short_name}]({product_link}) \n(Quantity Left: {quantity})\n"
-        message += f"- {short_name} \n(Quantity Left: {quantity})\n"
+        else:
+            message += f"- {short_name} \n(Quantity Left: {quantity})\n"
 
 
     if not check_all_products:
