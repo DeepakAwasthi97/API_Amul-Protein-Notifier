@@ -28,27 +28,40 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 
 ## Setup
 
-1. Clone the repo
-2. Create a `.env` file with your Telegram bot token and other secrets, 
-   primarily the keys required will be TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID
+1. Clone the repository
+
+2. Create a `.env` file with your configuration. You can copy from `.env.example` as a template:
+   ```bash
+   cp .env.example .env
+   ```
+
+   Required environment variables:
+   - `TELEGRAM_BOT_TOKEN` - Your Telegram bot token from @BotFather
+   - `ADMIN_CHAT_ID` - Your Telegram chat ID for admin notifications
+   - `DATABASE_URL` - PostgreSQL connection string
+
+
 3. Install dependencies:
+
    ```bash
    pip install -r requirements.txt
    ```
-   ```bash
-   pip install aiosqlite
-   ```
+
 4. Consider downloading and installing DB Browser
-5. Run the main script:
+
+5. Run the application:
+
+   **Start the Telegram bot:**
+   ```bash
+   python main.py
+   ```
+   This starts the Telegram bot that users can interact with to subscribe/unsubscribe to notifications.
+
+   **Fetch product details and notify users:**
    ```bash
    python check_products.py
    ```
-
-## You may need to run the below command, subjective to any warnings you get in the console
-
-```bash
-pip install "python-telegram-bot[job-queue]"
-```
+   This script fetches product availability from the Amul website and sends notifications to subscribed users.
 
 ## Excluded from Public Repo
 
