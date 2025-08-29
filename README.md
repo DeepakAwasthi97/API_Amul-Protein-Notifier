@@ -23,7 +23,8 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) - Fast Python package installer and resolver
 - Generate a Telegram Bot TOKEN for a dummy bot of your own using the @BotFather official bot on telegram and store it in .env
 
 ## Setup
@@ -41,10 +42,29 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
    - `DATABASE_URL` - PostgreSQL connection string
 
 
-3. Install dependencies:
+3. Install uv (if not already installed):
+
+   **macOS and Linux:**
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+   **Windows:**
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+   **Alternative methods:**
+   - PyPI: `pipx install uv` or `pip install uv`
+   - Homebrew: `brew install uv`
+   - WinGet: `winget install --id=astral-sh.uv -e`
+
+   For more installation options, see the [official uv installation guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+4. Install dependencies:
 
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
 4. Consider downloading and installing DB Browser
@@ -53,13 +73,13 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 
    **Start the Telegram bot:**
    ```bash
-   python main.py
+   uv run main.py
    ```
    This starts the Telegram bot that users can interact with to subscribe/unsubscribe to notifications.
 
    **Fetch product details and notify users:**
    ```bash
-   python check_products.py
+   uv run check_products.py
    ```
    This script fetches product availability from the Amul website and sends notifications to subscribed users.
 
