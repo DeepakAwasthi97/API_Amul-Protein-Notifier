@@ -155,6 +155,13 @@ async def notification_preference_callback(update: Update, context: ContextTypes
         logger.error(f"Error updating notification preference for chat_id {chat_id}: {str(e)}")
         await query.edit_message_text("⚠️ Failed to update notification preference. Please try again.")
 
+
+async def interaction_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    logger.info("Conversation timed out")
+    await context.bot.send_message(reply_to_message_id=update.message.id, chat_id=chat_id, text="⚠️ Interaction timed out. Please try again")
+    return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
     chat_id = update.effective_chat.id
@@ -1800,6 +1807,7 @@ async def main():
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
+        conversation_timeout=timedelta(minutes=2),
         entry_points=[
             CommandHandler("setpincode", set_pincode),
             CommandHandler("support", support),
@@ -1815,6 +1823,7 @@ async def main():
             ],
             AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply_received)],
             AWAITING_NOTIFICATION_PREFERENCE: [CallbackQueryHandler(notification_preference_callback, pattern='^notif_pref_')],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, interaction_timeout)]
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
@@ -1822,6 +1831,7 @@ async def main():
             CommandHandler("setproducts", set_products)
         ],
         per_message=False,
+        allow_reentry=True,
     )
 
     app.add_handler(CommandHandler("start", start))
