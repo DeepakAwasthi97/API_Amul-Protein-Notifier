@@ -155,6 +155,13 @@ async def notification_preference_callback(update: Update, context: ContextTypes
         logger.error(f"Error updating notification preference for chat_id {chat_id}: {str(e)}")
         await query.edit_message_text("⚠️ Failed to update notification preference. Please try again.")
 
+
+async def interaction_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    logger.info("Conversation timed out")
+    await context.bot.send_message(reply_to_message_id=update.message.id, chat_id=chat_id, text="⚠️ Interaction timed out. Please try again")
+    return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
     chat_id = update.effective_chat.id
@@ -295,13 +302,34 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.pop(key, None)
 
     keyboard = [
-        [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
+        [InlineKeyboardButton("Contact Me 📞", callback_data="contact_support")],
         [InlineKeyboardButton("Support Project 🌟", callback_data="support_project")]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("📞 How can we assist you today?", reply_markup=reply_markup)
     return AWAITING_PRODUCT_SELECTION
+
+
+async def support_contact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the support admin callback action"""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    logger.debug("Support callback triggered for chat_id %s with action %s", chat_id, query.data)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    action = query.data
+
+    if action == "contact_support":
+        # Check rate limit (1 message every 1 minute)
+        last_support_time = context.user_data.get("last_support_time")
+        if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
+            await query.edit_message_text("⏳ Please wait a few minutes before sending another support message.")
+            return ConversationHandler.END
+
+        await query.edit_message_text("📞 We're listening! Please send your feedback or issue. Use /cancel to stop.")
+        return AWAITING_SUPPORT_MESSAGE
 
 async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the support menu callback actions."""
@@ -313,17 +341,7 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     action = query.data
 
-    if action == "support_contact":
-        # Check rate limit (1 message every 1 minute)
-        last_support_time = context.user_data.get("last_support_time")
-        if last_support_time and (datetime.now() - last_support_time) < timedelta(minutes=1):
-            await query.edit_message_text("⏳ Please wait a few minutes before sending another support message.")
-            return ConversationHandler.END
-
-        await query.edit_message_text("📞 We're listening! Please send your feedback or issue. Use /cancel to stop.")
-        return AWAITING_SUPPORT_MESSAGE
-
-    elif action == "support_project":
+    if action == "support_project":
         keyboard = [
             [InlineKeyboardButton("Give ⭐ on GitHub", callback_data="support_github")],
             [InlineKeyboardButton("Tip (chai/coffee) 😊", callback_data="support_tip")],
@@ -332,7 +350,6 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🌟 Support the project:\n- Give a star on GitHub.\n- Tip with chai or coffee!", reply_markup=reply_markup)
-        return AWAITING_PRODUCT_SELECTION
 
     elif action == "support_github":
         keyboard = [
@@ -341,7 +358,6 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("⭐ Thank you for supporting! Please visit https://github.com/DeepakAwasthi97/API_Amul-Protein-Notifier to give a star manually.", reply_markup=reply_markup)
-        return AWAITING_PRODUCT_SELECTION
 
     elif action == "support_tip":
         keyboard = [
@@ -350,17 +366,15 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("😊 Thank you for the tip! Please support via https://razorpay.me/@amulproteinnotifierbot", reply_markup=reply_markup)
-        return AWAITING_PRODUCT_SELECTION
 
     elif action == "support_back":
         keyboard = [
-            [InlineKeyboardButton("Contact Me 📞", callback_data="support_contact")],
+            [InlineKeyboardButton("Contact Me 📞", callback_data="contact_support")],
             [InlineKeyboardButton("Support Project 🌟", callback_data="support_project")]
         ]
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("📞 How can we assist you today?", reply_markup=reply_markup)
-        return AWAITING_PRODUCT_SELECTION
 
 async def support_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the support message received from the user during a conversation."""
@@ -1800,9 +1814,10 @@ async def main():
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
+        conversation_timeout=timedelta(minutes=2),
         entry_points=[
             CommandHandler("setpincode", set_pincode),
-            CommandHandler("support", support),
+            CallbackQueryHandler(support_contact_callback, pattern='^contact_support$'),
             CommandHandler("setproducts", set_products),
             CallbackQueryHandler(reply_callback, pattern='^reply_'),
         ],
@@ -1810,11 +1825,11 @@ async def main():
             AWAITING_PINCODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pincode_received)],
             AWAITING_SUPPORT_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_message_received)],
             AWAITING_PRODUCT_SELECTION: [
-                CallbackQueryHandler(support_callback, pattern='^support_'),
                 CallbackQueryHandler(set_products_callback, pattern='^products_')
             ],
             AWAITING_ADMIN_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply_received)],
             AWAITING_NOTIFICATION_PREFERENCE: [CallbackQueryHandler(notification_preference_callback, pattern='^notif_pref_')],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, interaction_timeout)]
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
@@ -1822,9 +1837,12 @@ async def main():
             CommandHandler("setproducts", set_products)
         ],
         per_message=False,
+        allow_reentry=True,
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(support_callback, pattern="^support_"))
+    app.add_handler(CommandHandler("support", support))
     app.add_handler(CommandHandler("notification_preference", notification_preference))
     app.add_handler(CallbackQueryHandler(notification_preference_callback, pattern="^notif_pref_"))
     app.add_handler(CommandHandler("reply", reply))
