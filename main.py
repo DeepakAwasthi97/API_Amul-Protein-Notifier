@@ -23,6 +23,7 @@ import sys
 
 # Local imports
 import common
+from common import get_product_info, create_product_list_markdown_links
 import config
 from database import Database
 from config import DATABASE_URL, BASE_URL
@@ -174,7 +175,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pincode = user.get("pincode")
         if user.get("active"):
             products = user.get("products", ["Any"])
-            product_message = "All of the available Amul Protein products 🧀" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
+            product_message = "All of the available Amul Protein products 🧀" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {get_product_info(p, 'display_name') or p}" for p in products)
 
             message_text = (
                 f"🎉 You have already enabled notifications for PINCODE {pincode} 📍.\n\n"
@@ -412,7 +413,7 @@ async def support_message_received(update: Update, context: ContextTypes.DEFAULT
     user_info += f"Pincode: {user.get('pincode', 'Not set')}\n"
     user_info += f"Active status: {user.get('active')}\n"
     products = user.get("products", ["Any"]) if user else ["Any"]
-    product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {common.PRODUCT_NAME_MAP.get(p, p)}" for p in products)
+    product_message = "All available Amul Protein products" if len(products) == 1 and products[0].lower() == "any" else "\n".join(f"- {get_product_info(p, 'display_name') or p}" for p in products)
     user_info += f"Tracked Products:\n{product_message}\n"
 
     # Add notification preference
@@ -795,7 +796,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
         action_for_rendering = action
 
         if action == "products_nav_main" and selected_products:
-            display_products = [common.PRODUCT_NAME_MAP.get(p, p) for p in selected_products if p in common.PRODUCTS]
+            display_products = [get_product_info(p, 'display_name') or p for p in selected_products if p in common.PRODUCTS]
             product_list_text = "\n".join(f"- {p}" for p in display_products if p)
 
             if not product_list_text:
@@ -852,7 +853,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     for product_name in common.CATEGORIZED_PRODUCTS[current_category]:
                         product_index = common.PRODUCTS.index(product_name)
                         selected_marker = "☑️ " if product_name in selected_products else ""
-                        keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{product_index}")])
+                        keyboard.append([InlineKeyboardButton(f"{selected_marker}{get_product_info(product_name, 'display_name') or product_name}", callback_data=f"products_toggle_{product_index}")])
 
                     keyboard.append([
                         InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm"),
@@ -864,7 +865,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     for i, product_name in enumerate(common.PRODUCTS):
                         if product_name == "Any": continue
                         selected_marker = "☑️ " if product_name in selected_products else ""
-                        keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{i}")])
+                        keyboard.append([InlineKeyboardButton(f"{selected_marker}{get_product_info(product_name, 'display_name') or product_name}", callback_data=f"products_toggle_{i}")])
 
                     keyboard.append([
                         InlineKeyboardButton("✅ Confirm Selection", callback_data="products_confirm"),
@@ -925,7 +926,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     "All of the available Amul Protein products 🧀"
                     if len(current_tracked_products) == 1 and current_tracked_products[0].lower() == "any"
                     else "\n".join(
-                        f"- {common.PRODUCT_NAME_MAP.get(p, p)}"
+                        f"- {get_product_info(p, 'display_name') or p}"
                         for p in current_tracked_products
                     )
                 )
@@ -941,8 +942,8 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
             final_selection = ["Any"] if "Any" in selected_products else list(selected_products)
             product_message = "\n".join(
-                f"- {common.PRODUCT_NAME_MAP.get(p, p)}"
-                for p in final_selection if common.PRODUCT_NAME_MAP.get(p, p)
+                f"- {get_product_info(p, 'display_name') or p}"
+                for p in final_selection if get_product_info(p, 'display_name') or p
             )
             if not product_message:
                 product_message = "No valid product names available."
@@ -1020,7 +1021,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             for product_name in common.CATEGORIZED_PRODUCTS[category]:
                 product_index = common.PRODUCTS.index(product_name)
                 selected_marker = "☑️ " if product_name in selected_products else ""
-                keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{product_index}")])
+                keyboard.append([InlineKeyboardButton(f"{selected_marker}{get_product_info(product_name, 'display_name') or product_name}", callback_data=f"products_toggle_{product_index}")])
 
         elif action_for_rendering == "products_nav_all":
             context.user_data["product_menu_view"] = "all"
@@ -1029,7 +1030,7 @@ async def set_products_callback(update: Update, context: ContextTypes.DEFAULT_TY
             for i, product_name in enumerate(common.PRODUCTS):
                 if product_name == "Any": continue
                 selected_marker = "☑️ " if product_name in selected_products else ""
-                keyboard.append([InlineKeyboardButton(f"{selected_marker}{common.PRODUCT_NAME_MAP.get(product_name, product_name)}", callback_data=f"products_toggle_{i}")])
+                keyboard.append([InlineKeyboardButton(f"{selected_marker}{get_product_info(product_name, "display_name") or product_name}", callback_data=f"products_toggle_{i}")])
 
         if action_for_rendering not in ["products_nav_main", "products_nav_cat_list"]:
             keyboard.append([
@@ -1109,12 +1110,8 @@ async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(products) == 1 and products[0].lower() == "any":
         product_message = "All available Amul Protein products 🧀"
     else:
-        # Build product lines defensively to avoid f-string parsing issues
-        # on older Python versions or environments.
-        product_message = "\n".join(
-            f"- [{common.PRODUCT_NAME_MAP.get(p, p)}]({BASE_URL + '/en/product/' + common.PRODUCT_ALIAS_MAP.get(p)})"
-            for p in products
-        )
+        # Use the new markdown link method from common.py
+        product_message = create_product_list_markdown_links(products)
 
     # Construct and send the message
     message = (
@@ -1204,7 +1201,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_text += "- All available Amul Protein products 🧀"
         else:
             for product in products:
-                status_text += f"- {common.PRODUCT_NAME_MAP.get(product, product)}\n"
+                status_text += f"- {get_product_info(product, "display_name") or product}\n"
 
         await update.message.reply_text(status_text, parse_mode="Markdown")
     else:
@@ -1237,8 +1234,8 @@ async def unfollow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["original_products_followed_list"] = products_followed  # stores the original followed list of products
     context.user_data["curr_products_to_unfollow"] = set() # stores the ids of the products that the user wishes to unfollow at the moment
     for product in products_followed :
-        product_display_name  = common.PRODUCT_NAME_MAP.get(product, product)
-        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
+        product_display_name  = get_product_info(product, "display_name") or product
+        product_temp_id = get_product_info(product, "temp_id") or product
         callback_data_arg = f"{UNFOLLOW_TOGGLE_PREFIX}{product_temp_id}"
         tabloid_keyboard_ui.append(
             [InlineKeyboardButton(f"Unfollow {product_display_name }", callback_data=callback_data_arg)],
@@ -1302,8 +1299,8 @@ async def unfollow_callback_handler(update: Update, context: ContextTypes.DEFAUL
     # --- Rebuild the Inline Keyboard with updated selections ---
     updated_keyboard_rows = []
     for product in original_products_list:
-        product_display_name = common.PRODUCT_NAME_MAP.get(product, product)
-        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
+        product_display_name = get_product_info(product, "display_name") or product
+        product_temp_id = get_product_info(product, "temp_id") or product
         
         # Determine the marker based on whether the product is in the current selection set
         marker = "🚫" if product_temp_id in curr_products_to_unfollow_set else "Unfollow "
@@ -1374,8 +1371,8 @@ async def confirm_unfollow_handler(update: Update, context: ContextTypes.DEFAULT
 
     # Create list of products to keep
     for product in original_products_list:
-        product_temp_id = common.TEMP_PRDCT_TO_ID_MAP.get(product, product)
-        product_display_name = common.PRODUCT_NAME_MAP.get(product, product)
+        product_temp_id = get_product_info(product, "temp_id") or product
+        product_display_name = get_product_info(product, "display_name") or product
         if product_temp_id not in curr_products_to_unfollow_list:
             updated_subscriptions_display_text += f"\n- {product_display_name}"
             updated_subscriptions.append(product)
@@ -1739,13 +1736,13 @@ async def bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stats_message += "\n*Top 5 Products (Including 'Any')*:\n"
     for product, count in top_products_all:
-        product_name = common.PRODUCT_NAME_MAP.get(product, product)
+        product_name = get_product_info(product, "display_name") or product
         stats_message += f"- {product_name}: {count} users\n"
 
     stats_message += "\n*Top 3 Specific Tracked Products (Excluding 'Any')*:\n"
     if top_specific_products:
         for product, count in top_specific_products:
-            product_name = common.PRODUCT_NAME_MAP.get(product, product)
+            product_name = get_product_info(product, "display_name") or product
             stats_message += f"- {product_name}: {count} users\n"
     else:
         stats_message += "- No specific products are currently tracked.\n"

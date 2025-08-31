@@ -8,9 +8,9 @@ import sys
 import os
 from config import TELEGRAM_BOT_TOKEN, SEMAPHORE_LIMIT, USE_SUBSTORE_CACHE, FALLBACK_TO_PINCODE_CACHE, NOTIFICATION_CONCURRENCY_LIMIT
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram.ext import Application
-from common import PRODUCT_NAME_MAP, PRODUCT_ALIAS_MAP
+from common import PRODUCT_ALIAS_MAP, get_product_info
 import cloudscraper
 import aiohttp
 import json
@@ -177,7 +177,7 @@ async def get_products_availability_api_only_async(pincode, max_concurrent_produ
         async with aiohttp.ClientSession(cookies=cookies) as session:
             semaphore = asyncio.Semaphore(max_concurrent_products)
             tasks = [
-                (product_name, PRODUCT_ALIAS_MAP[product_name], fetch_product_data_for_alias_async(session, tid, substore_id, PRODUCT_ALIAS_MAP[product_name], semaphore, cookies=cookies))
+                (product_name, get_product_info(product_name, "slug"), fetch_product_data_for_alias_async(session, tid, substore_id, get_product_info(product_name, "slug"), semaphore, cookies=cookies))
                 for product_name in PRODUCT_ALIAS_MAP.keys()
             ]
             product_status = []
