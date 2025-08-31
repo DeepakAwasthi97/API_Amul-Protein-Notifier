@@ -23,32 +23,65 @@ A modular, production-ready Telegram bot that checks Amul protein product availa
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) - Fast Python package installer and resolver
 - Generate a Telegram Bot TOKEN for a dummy bot of your own using the @BotFather official bot on telegram and store it in .env
 
 ## Setup
 
-1. Clone the repo
-2. Create a `.env` file with your Telegram bot token and other secrets, 
-   primarily the keys required will be TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID
-3. Install dependencies:
+1. Clone the repository
+
+2. Create a `.env` file with your configuration. You can copy from `.env.example` as a template:
    ```bash
-   pip install -r requirements.txt
+   cp .env.example .env
    ```
+
+   Required environment variables:
+   - `TELEGRAM_BOT_TOKEN` - Your Telegram bot token from @BotFather
+   - `ADMIN_CHAT_ID` - Your Telegram chat ID for admin notifications
+   - `DATABASE_URL` - PostgreSQL connection string
+
+
+3. Install uv (if not already installed):
+
+   **macOS and Linux:**
    ```bash
-   pip install aiosqlite
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
+
+   **Windows:**
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+   **Alternative methods:**
+   - PyPI: `pipx install uv` or `pip install uv`
+   - Homebrew: `brew install uv`
+   - WinGet: `winget install --id=astral-sh.uv -e`
+
+   For more installation options, see the [official uv installation guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+4. Install dependencies:
+
+   ```bash
+   uv sync
+   ```
+
 4. Consider downloading and installing DB Browser
-5. Run the main script:
+
+5. Run the application:
+
+   **Start the Telegram bot:**
    ```bash
-   python check_products.py
+   uv run main.py
    ```
+   This starts the Telegram bot that users can interact with to subscribe/unsubscribe to notifications.
 
-## You may need to run the below command, subjective to any warnings you get in the console
-
-```bash
-pip install "python-telegram-bot[job-queue]"
-```
+   **Fetch product details and notify users:**
+   ```bash
+   uv run check_products.py
+   ```
+   This script fetches product availability from the Amul website and sends notifications to subscribed users.
 
 ## Excluded from Public Repo
 

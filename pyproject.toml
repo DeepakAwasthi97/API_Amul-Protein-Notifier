@@ -1,0 +1,15 @@
+[project]
+name = "amul-protein-notifier"
+version = "0.1.0"
+description = "Telegram bot that checks Amul protein product availability"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "asyncpg>=0.30.0",
+    "cloudscraper>=1.2.71",
+    "psutil>=7.0.0",
+    "python-dotenv>=1.1.1",
+    "python-telegram-bot[job-queue]>=20.0",
+    "requests>=2.32.5",
+]

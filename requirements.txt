@@ -2,5 +2,6 @@ python-dotenv
 requests
 aiohttp
 cloudscraper
-python-telegram-bot>=20.0
+python-telegram-bot[job-queue]>=20.0
 psutil
+asyncpg
