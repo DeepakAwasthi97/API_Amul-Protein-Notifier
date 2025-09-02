@@ -3,8 +3,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 from utils import mask
-from common import PRODUCT_NAME_MAP, PRODUCT_ALIAS_MAP
-from config import BASE_URL
+from common import get_product_info, create_product_url
 import logging
 logger = logging.getLogger(__name__)
 
@@ -37,10 +36,9 @@ async def send_telegram_notification_for_user(app, chat_id, pincode, products_to
         (name, status, quantity) for name, status, quantity in in_stock_products if name in products_to_check
     ]
     for name, _, quantity in relevant_products:
-        short_name = PRODUCT_NAME_MAP.get(name, name)
-        product_slug = PRODUCT_ALIAS_MAP.get(name)
-        product_link = f"{BASE_URL}/en/product/{product_slug}"
-        if product_slug:
+        short_name = get_product_info(name, "display_name") or name
+        product_link = create_product_url(name)
+        if product_link:
             message += f"- {short_name} \n(Quantity Left: {quantity}) | [Buy Now]({product_link})\n"
         else:
             message += f"- {short_name} \n(Quantity Left: {quantity})\n"
