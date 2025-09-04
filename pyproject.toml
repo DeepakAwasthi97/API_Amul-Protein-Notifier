@@ -13,3 +13,8 @@ dependencies = [
     "python-telegram-bot[job-queue]>=20.0",
     "requests>=2.32.5",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.11",
+]

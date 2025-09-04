@@ -6,14 +6,18 @@ load_dotenv()
 
 # --- Database Configuration ---
 DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL connection string (required)
-DATABASE_FILE = os.getenv("DATABASE_FILE", "users.db")  # SQLite file path (optional, for migration)
+DATABASE_FILE = os.getenv(
+    "DATABASE_FILE", "users.db"
+)  # SQLite file path (optional, for migration)
 # --- Secrets and Environment-Specific ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # --- Concurrency Settings ---
 SEMAPHORE_LIMIT = 1
-NOTIFICATION_CONCURRENCY_LIMIT = int(os.getenv("NOTIFICATION_CONCURRENCY_LIMIT", 30))  # Default to 30 for Telegram limit
+NOTIFICATION_CONCURRENCY_LIMIT = int(
+    os.getenv("NOTIFICATION_CONCURRENCY_LIMIT", 30)
+)  # Default to 30 for Telegram limit
 MAX_RETRY = 1
 
 # --- File Paths ---
@@ -46,7 +50,7 @@ API_HEADERS = {
     "x-requested-with": "XMLHttpRequest",
     "sec-gpc": "1",
     "priority": "u=1, i",
-    "content-type": "application/json"
+    "content-type": "application/json",
 }
 
 # --- Substore Mapping ---
