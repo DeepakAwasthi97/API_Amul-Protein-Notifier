@@ -13,6 +13,10 @@ DATABASE_FILE = os.getenv(
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
+# --- Sentry Configuration ---
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT", "production")
+
 # --- Concurrency Settings ---
 SEMAPHORE_LIMIT = 1
 NOTIFICATION_CONCURRENCY_LIMIT = int(
