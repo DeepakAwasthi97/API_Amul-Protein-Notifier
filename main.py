@@ -26,7 +26,17 @@ import common
 from common import get_product_info, create_product_list_markdown_links
 import config
 from database import Database
-from config import DATABASE_URL, BASE_URL
+from config import DATABASE_URL, SENTRY_DSN, SENTRY_ENVIRONMENT
+from sentry_sdk.integrations.logging import LoggingIntegration
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=SENTRY_DSN,
+    integrations=[LoggingIntegration()],
+    traces_sample_rate=1.0,
+    enable_logs=True,
+    environment=SENTRY_ENVIRONMENT
+)
 
 logger = common.setup_logging()
 logger.setLevel(logging.DEBUG)
@@ -61,6 +71,47 @@ async def init_database():
 UNFOLLOW_TOGGLE_PREFIX = "unfollow_toggle_"  # For toggling selection
 UNFOLLOW_CONFIRM = "unfollow_confirm"  # For confirm button
 UNFOLLOW_CANCEL = "unfollow_cancel"  # For cancel button
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send it to Sentry for monitoring."""
+
+    # Set user context for Sentry BEFORE capturing the exception
+    if update and hasattr(update, "effective_user") and update.effective_user:
+        user_data = {
+            "id": str(update.effective_user.id),
+        }
+        if update.effective_user.username:
+            user_data["username"] = update.effective_user.username
+        if update.effective_user.first_name:
+            user_data["first_name"] = update.effective_user.first_name
+        if update.effective_user.last_name:
+            user_data["last_name"] = update.effective_user.last_name
+
+        sentry_sdk.set_user(user_data)
+
+    # Set additional context BEFORE capturing the exception
+    if update and hasattr(update, "effective_chat") and update.effective_chat:
+        chat_data = {
+            "id": str(update.effective_chat.id),
+            "type": update.effective_chat.type,
+        }
+        if hasattr(update.effective_chat, "title") and update.effective_chat.title:
+            chat_data["title"] = update.effective_chat.title
+
+        sentry_sdk.set_context("chat", chat_data)
+
+    # Set additional context about the error
+    sentry_sdk.set_context(
+        "error_details",
+        {
+            "error_type": type(context.error).__name__,
+            "error_message": str(context.error),
+        },
+    )
+
+    # Capture the exception in Sentry
+    sentry_sdk.capture_exception(context.error)
 
 
 # Simple escape_markdown function (from prev_main.py)
@@ -2415,6 +2466,9 @@ async def main():
         return
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+
+    # Add the error handler
+    app.add_error_handler(error_handler)
 
     conv_handler = ConversationHandler(
         conversation_timeout=timedelta(minutes=2),
