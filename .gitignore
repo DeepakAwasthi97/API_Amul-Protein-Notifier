@@ -17,6 +17,8 @@ backup-main - Copy.py
 backup-database.py
 users.db-shm
 users.db-wal
+amul_bot_backup.sql
+upload_to_github.py
 # Exclude IDE and editor specific files
 sqlite3.exe
 substore_list.py
