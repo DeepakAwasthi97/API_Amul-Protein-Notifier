@@ -24,6 +24,7 @@ from common import PRODUCT_ALIAS_MAP, get_product_info
 import cloudscraper
 import aiohttp
 import json
+import sentry_sdk
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 logger = logging.getLogger(__name__)
@@ -221,6 +222,12 @@ async def get_products_availability_api_only_async(
     pincode, max_concurrent_products=SEMAPHORE_LIMIT
 ):
     logger.info(f"Fetching availability for pincode: {pincode}")
+    # Add a breadcrumb so Sentry shows which pincode was being processed
+    sentry_sdk.add_breadcrumb(
+        category="product_api",
+        message=f"fetch_availability pincode={pincode}",
+        level="info",
+    )
     try:
         sync_session = cloudscraper.create_scraper()
         tid, substore, substore_id, cookies = get_tid_and_substore(
@@ -270,6 +277,9 @@ async def get_products_availability_api_only_async(
                         )
                 if data:
                     in_stock, quantity = is_product_in_stock(data[0], substore_id)
+                    # Tag the product and substore for richer Sentry context
+                    sentry_sdk.set_tag("substore_id", str(substore_id))
+                    sentry_sdk.set_tag("product_name", product_name)
                     product_status.append(
                         (product_name, "In Stock" if in_stock else "Sold Out", quantity)
                     )
@@ -278,11 +288,17 @@ async def get_products_availability_api_only_async(
             return product_status, substore_id, substore
     except Exception as e:
         logger.error(f"Error in get_products_availability_api_only_async: {e}")
+        sentry_sdk.capture_exception(e)
         return [], None, None
 
 
 async def check_product_availability_for_state(state_alias, sample_pincode, db):
     logger.info(f"Checking state {state_alias} with pincode: {sample_pincode}")
+    sentry_sdk.add_breadcrumb(
+        category="state_check",
+        message=f"start_state_check state={state_alias} pincode={sample_pincode}",
+        level="info",
+    )
     try:
         if USE_SUBSTORE_CACHE:
             cached_status = substore_cache.get(state_alias)
@@ -307,12 +323,19 @@ async def check_product_availability_for_state(state_alias, sample_pincode, db):
                 is_restock = await db.is_restock_event(
                     state_alias, product_name, status, previous_state
                 )
+                if is_restock:
+                    sentry_sdk.add_breadcrumb(
+                        category="restock",
+                        message=f"restock_detected state={state_alias} product={product_name}",
+                        level="info",
+                    )
                 restock_info[product_name] = is_restock
         if USE_SUBSTORE_CACHE:
             substore_cache[state_alias] = product_status
         return product_status, restock_info
     except Exception as e:
         logger.error(f"Error checking state {state_alias}: {e}")
+        sentry_sdk.capture_exception(e)
         return [], {}
 
 
@@ -603,13 +626,42 @@ async def check_products_for_users(db):
                             logger.info(
                                 f"Starting notification process for user {chat_id}"
                             )
-                            result = await send_telegram_notification_for_user(
-                                app,
-                                chat_id,
-                                user.get("pincode"),
-                                products_to_check,
-                                notify_products,
-                            )
+                            # Add Sentry context for this send
+                            try:
+                                with sentry_sdk.push_scope() as scope:
+                                    scope.set_tag("chat_id", str(chat_id))
+                                    # try to get state alias from user or notify_products
+                                    state_alias = user.get("state_alias") if isinstance(user, dict) else None
+                                    if not state_alias and notify_products:
+                                        # notify_products contains tuples (name, status, qty)
+                                        # products_to_check contains user's product filter
+                                        scope.set_tag("state_alias", str(state_alias))
+                                    scope.set_extra(
+                                        "products_to_notify",
+                                        [p for p, _, _ in notify_products],
+                                    )
+                                    sentry_sdk.add_breadcrumb(
+                                        category="notification",
+                                        message=f"sending_notification chat_id={chat_id} products={[p for p,_,_ in notify_products]}",
+                                        level="info",
+                                    )
+                                    result = await send_telegram_notification_for_user(
+                                        app,
+                                        chat_id,
+                                        user.get("pincode"),
+                                        products_to_check,
+                                        notify_products,
+                                    )
+                            except Exception as e:
+                                # Ensure exceptions during Sentry push_scope don't break notification flow
+                                logger.error(f"Error adding Sentry scope for user {chat_id}: {e}")
+                                result = await send_telegram_notification_for_user(
+                                    app,
+                                    chat_id,
+                                    user.get("pincode"),
+                                    products_to_check,
+                                    notify_products,
+                                )
                             if result is True:  # Success
                                 try:
                                     for product_name in products_notified:

@@ -27,16 +27,27 @@ from common import get_product_info, create_product_list_markdown_links
 import config
 from database import Database
 from config import DATABASE_URL, SENTRY_DSN, SENTRY_ENVIRONMENT
-from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_utils import init_sentry, create_task_catching
 import sentry_sdk
 
-sentry_sdk.init(
-    dsn=SENTRY_DSN,
-    integrations=[LoggingIntegration()],
-    traces_sample_rate=1.0,
-    enable_logs=True,
-    environment=SENTRY_ENVIRONMENT
-)
+# Initialize Sentry centrally (reads DSN and env from `config`)
+init_sentry()
+
+# Set a loop exception handler so unhandled exceptions in background
+# tasks are captured and sent to Sentry.
+def _loop_exception_handler(loop, context):
+    exc = context.get("exception")
+    if not exc:
+        exc = Exception(context.get("message"))
+    sentry_sdk.capture_exception(exc)
+    loop.default_exception_handler(context)
+
+try:
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(_loop_exception_handler)
+except Exception:
+    # In some environments an event loop may not be available at import time
+    pass
 
 logger = common.setup_logging()
 logger.setLevel(logging.DEBUG)

@@ -58,16 +58,16 @@ PRODUCT_DATA = {
         "temp_id": "akpmv30",
         "category": "Milkshakes & Shakes",
     },
+    "Amul High Protein Blueberry Shake, 200 mL | Pack of 8": {
+        "display_name": "🫐 Blueberry Shake 200mL | Pack of 8",
+        "slug": "amul-high-protein-blueberry-shake-200-ml-or-pack-of-8",
+        "temp_id": "ahpbbs8",
+        "category": "Milkshakes & Shakes",
+    },
     "Amul High Protein Blueberry Shake, 200 mL | Pack of 30": {
         "display_name": "🫐🫐 Blueberry Shake 200mL | Pack of 30",
         "slug": "amul-high-protein-blueberry-shake-200-ml-or-pack-of-30",
         "temp_id": "ahpbbs30",
-        "category": "Milkshakes & Shakes",
-    },
-    "Amul High Protein Blueberry Shake, 200 mL | Pack of 8": {
-        "display_name": "🫐🫐 Blueberry Shake 200mL | Pack of 8",
-        "slug": "amul-high-protein-blueberry-shake-200-ml-or-pack-of-8",
-        "temp_id": "ahpbbs8",
         "category": "Milkshakes & Shakes",
     },
     "Amul High Protein Plain Lassi, 200 mL | Pack of 30": {

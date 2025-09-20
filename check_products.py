@@ -5,6 +5,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from utils import setup_logging
 from common import is_already_running
+from sentry_utils import capture_cron_event
 import time
 import signal
 from product_checker import check_products_for_users
@@ -25,6 +26,8 @@ async def main_async():
     signal.signal(signal.SIGTERM, handle_shutdown)
 
     try:
+        # Signal to Sentry that a cron run has started
+        capture_cron_event("check_products", status="start")
         if is_already_running("check_products.py"):
             logger.error(
                 "Another instance of check_products.py is already running. Exiting..."
@@ -42,9 +45,15 @@ async def main_async():
     except KeyboardInterrupt:
         logger.info("Main process interrupted, exiting cleanly...")
         await db.close()
+        capture_cron_event("check_products", status="interrupted")
         raise SystemExit(0)
     except Exception as e:
         logger.error(f"Unexpected error in main: {e}")
+        # Send error event to Sentry for cron monitoring
+        try:
+            capture_cron_event("check_products", status="error", extra={"error": str(e)})
+        except Exception:
+            pass
         await db.close()
         raise SystemExit(1)
 
@@ -72,6 +81,10 @@ def main():
         print(f"Total execution time: {int(minutes)} minutes {seconds:.2f} seconds")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
+        try:
+            capture_cron_event("check_products", status="fatal", extra={"error": str(e)})
+        except Exception:
+            pass
         raise SystemExit(1)
 
 
