@@ -67,7 +67,7 @@ PRODUCT_API_DELAY_RANGE = (1.0, 2.0)
 GLOBAL_PRODUCT_API_RPS = 5
 
 # --- Logging and Monitoring ---
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_FILE_SIZE = 1*1024*1024  # 100 MB
 MAX_OF_DAYS = 1
 
 # --- Execution Mode ---

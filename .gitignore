@@ -25,3 +25,4 @@ substore_list.py
 test_notification_logic.py
 test_users.db
 download_from_github.py
+.__product_check.lock

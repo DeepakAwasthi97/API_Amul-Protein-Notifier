@@ -1,5 +1,11 @@
 import logging
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+from logging.handlers import RotatingFileHandler
+try:
+    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    _HAS_CONCURRENT_HANDLER = True
+except Exception:
+    ConcurrentRotatingFileHandler = None
+    _HAS_CONCURRENT_HANDLER = False
 from config import LOG_FILE, MAX_FILE_SIZE, MAX_OF_DAYS
 import time
 import random
@@ -12,51 +18,16 @@ def setup_logging():
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
-    # Rotating by size and by time (days)
-    class SizeAndTimeRotatingHandler(TimedRotatingFileHandler):
-        def __init__(
-            self,
-            filename,
-            maxBytes,
-            backupCount,
-            when,
-            interval,
-            encoding=None,
-            delay=False,
-            utc=False,
-            atTime=None,
-        ):
-            super().__init__(
-                filename,
-                when=when,
-                interval=interval,
-                backupCount=backupCount,
-                encoding=encoding,
-                delay=delay,
-                utc=utc,
-                atTime=atTime,
-            )
-            self.maxBytes = maxBytes
-
-        def shouldRollover(self, record):
-            # Time-based rollover
-            if super().shouldRollover(record):
-                return 1
-            # Size-based rollover
-            if self.maxBytes > 0:
-                self.stream = self.stream or self._open()
-                if os.path.getsize(self.baseFilename) >= self.maxBytes:
-                    return 1
-            return 0
-
-    handler = SizeAndTimeRotatingHandler(
-        LOG_FILE,
-        maxBytes=MAX_FILE_SIZE,
-        backupCount=1,
-        when="D",
-        interval=MAX_OF_DAYS,
-        encoding="utf-8",
-    )
+    # Prefer a process-safe rotating handler for multi-process writes
+    if _HAS_CONCURRENT_HANDLER:
+        handler = ConcurrentRotatingFileHandler(
+            LOG_FILE, maxBytes=MAX_FILE_SIZE, backupCount=1, encoding="utf-8"
+        )
+    else:
+        # Fallback: use RotatingFileHandler (not safe across multiple processes)
+        handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=MAX_FILE_SIZE, backupCount=1, encoding="utf-8"
+        )
 
     logging.basicConfig(
         level=logging.INFO,
