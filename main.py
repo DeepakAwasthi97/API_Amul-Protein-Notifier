@@ -3,7 +3,7 @@ import json
 import base64
 import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from substore_list import substore_info
 from telegram.ext import (
     Application,
@@ -287,9 +287,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             product_message = (
                 "All of the available Amul Protein products 🧀"
                 if len(products) == 1 and products[0].lower() == "any"
-                else "\n".join(
-                    f"- {get_product_info(p, 'display_name') or p}" for p in products
-                )
+                else create_product_list_markdown_links(products)
             )
 
             message_text = (
@@ -331,9 +329,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # Escape the entire message for MarkdownV2
-    escaped_text = escape_markdown(message_text)
+    # escaped_text = escape_markdown(message_text)
 
-    await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 
 async def _save_pincode(
@@ -1364,14 +1362,8 @@ async def set_products_callback(
                 )
                 return ConversationHandler.END
 
-            final_selection = (
-                ["Any"] if "Any" in selected_products else list(selected_products)
-            )
-            product_message = "\n".join(
-                f"- {get_product_info(p, 'display_name') or p}"
-                for p in final_selection
-                if get_product_info(p, "display_name") or p
-            )
+            final_selection = ["Any"] if "Any" in selected_products else list(selected_products)
+            product_message = create_product_list_markdown_links(final_selection)
             if not product_message:
                 product_message = "No valid product names available."
                 logger.warning(
@@ -1395,9 +1387,7 @@ async def set_products_callback(
             try:
                 success = await _save_products(chat_id, final_selection)
                 if success:
-                    await query.edit_message_text(
-                        f"✅ Your selections have been saved.\nYou will be notified for:\n \n{product_message}"
-                    )
+                    await query.edit_message_text(f"✅ Your selections have been saved.\nYou will be notified for:\n \n{product_message}", parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
                 else:
                     await query.edit_message_text(
                         "❌ Sorry, there was a problem saving your selection. Please try again later."
