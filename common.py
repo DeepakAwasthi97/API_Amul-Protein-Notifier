@@ -10,6 +10,18 @@ PRODUCT_DATA = {
         "temp_id": None,
         "category": None,
     },
+    "Amul 99% CACAO Dark Chocolate, 125 g | Pack of 2": {
+        "display_name": "99% CACAO Dark Chocolate | Pack of 2",
+        "slug": "amul-99percent-cacao-dark-chocolate-125-g-or-pack-of-2",
+        "temp_id": "a99pcdc2",
+        "category": "Chocolates"
+    },
+    "Amul Sugar Free 55% Dark Chocolate, 150 g | Pack of 2": {
+        "display_name": "Sugar Free 55% Dark Chocolate, 150 g | Pack of 2",
+        "slug": "amul-sugar-free-55percent-dark-chocolate-150-g-or-pack-of-2",
+        "temp_id": "asfdc2",
+        "category": "Chocolates"
+    },
     "Dark Passion Wafer Chocolate Tub, 300 g": {
         "display_name": "Dark Passion Wafer Chocolate Tub, 300 g",
         "slug": "amul-dark-passion-wafer-chocolate-tub-300-g",
