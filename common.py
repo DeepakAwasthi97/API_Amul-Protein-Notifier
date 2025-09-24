@@ -10,6 +10,72 @@ PRODUCT_DATA = {
         "temp_id": None,
         "category": None,
     },
+    "Amul 99% CACAO Dark Chocolate, 125 g | Pack of 2": {
+        "display_name": "99% CACAO Dark Chocolate | Pack of 2",
+        "slug": "amul-99percent-cacao-dark-chocolate-125-g-or-pack-of-2",
+        "temp_id": "a99pcdc2",
+        "category": "Chocolates"
+    },
+    "Amul Sugar Free 55% Dark Chocolate, 150 g | Pack of 2": {
+        "display_name": "Sugar Free 55% Dark Chocolate, 150 g | Pack of 2",
+        "slug": "amul-sugar-free-55percent-dark-chocolate-150-g-or-pack-of-2",
+        "temp_id": "asfdc2",
+        "category": "Chocolates"
+    },
+    "Dark Passion Wafer Chocolate Tub, 300 g": {
+        "display_name": "Dark Passion Wafer Chocolate Tub, 300 g",
+        "slug": "amul-dark-passion-wafer-chocolate-tub-300-g",
+        "temp_id": "adpwct",
+        "category": "Chocolates",
+    },
+    "Amul Camel Milk Bottle, 200 mL | Pack of 8": {
+        "display_name": "🐪 Camel Milk 200 mL | Pack of 8",
+        "slug": "amul-camel-milk-bottle-200-ml-or-pack-of-8",
+        "temp_id": "acmb8",
+        "category": "Milk"
+    },
+    "Amul Camel Milk Bottle, 200 mL | Pack of 30": {
+        "display_name": "🐪🐪 Camel Milk 200 mL | Pack of 30",
+        "slug": "amul-camel-milk-bottle-200-ml-or-pack-of-30",
+        "temp_id": "acmb30",
+        "category": "Milk"
+    },
+    "Amul Flavoured Camel Milk, 180 mL | Pack of 8": {
+        "display_name": "🐪🟠 Flavoured Camel Milk 180 mL | Pack of 8",
+        "slug": "amul-flavoured-camel-milk-180-ml-or-pack-of-8",
+        "temp_id": "akfcm8",
+        "category": "Milk"
+    },
+    "Amul Flavoured Camel Milk, 180 mL | Pack of 30": {
+        "display_name": "🐪🐪🟠 Flavoured Camel Milk 180 mL | Pack of 30",
+        "slug": "amul-flavoured-camel-milk-180-ml-or-pack-of-30",
+        "temp_id": "akfcm30",
+        "category": "Milk"
+    },
+    "Amul Calci+ Milk, 1 L | Pack of 4": {
+        "display_name": "🫙🦴 Calci+ Milk, 1 L | Pack of 4",
+        "slug": "amul-calci-milk-1-l-or-pack-of-4",
+        "temp_id": "acpm4",
+        "category": "Milk"
+    },
+    "Amul Calci+ Milk, 1 L | Pack of 12": {
+        "display_name": "🫙🫙🦴 Calci+ Milk, 1 L | Pack of 12",
+        "slug": "amul-calci-milk-1-l-or-pack-of-12",
+        "temp_id": "acpm12",
+        "category": "Milk"
+    },
+    "Amul Calci+ Milk, 250 mL | Pack of 8": {
+        "display_name": "🥛🦴 Calci+ Milk, 250 mL | Pack of 8",
+        "slug": "amul-calci-milk-250-ml-or-pack-of-8",
+        "temp_id": "acpm8",
+        "category": "Milk"
+    },
+    "Amul Calci+ Milk, 250 mL | Pack of 32": {
+        "display_name": "🥛🥛🦴 Calci+ Milk, 250 mL | Pack of 32",
+        "slug": "amul-calci-milk-250-ml-or-pack-of-32",
+        "temp_id": "acpm32",
+        "category": "Milk"
+    },
     "Amul Kool Protein Milkshake | Chocolate, 180 mL | Pack of 8": {
         "display_name": "🍫 Chocolate Milkshake 180mL | Pack of 8",
         "slug": "amul-kool-protein-milkshake-or-chocolate-180-ml-or-pack-of-8",
